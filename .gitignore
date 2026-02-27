@@ -1,0 +1,17 @@
+.env
+*.env
+*.key
+data/*.csv
+data/*.pkl
+data/*.parquet
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.log
+*.tmp
+.DS_Store
+*.sqlite
+*.db
+results/
