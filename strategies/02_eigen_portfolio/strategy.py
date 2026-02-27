@@ -117,14 +117,25 @@ class EigenPortfolioStrategy(BaseStrategy):
             w = 1.0 / len(top)
             return {t: w for t in top}
         else:
-            # ロングショート: 上位を買い、下位を売り
-            top_long  = loadings.nlargest(self.top_n // 2).index.tolist()
-            top_short = loadings.nsmallest(self.top_n // 2).index.tolist()
+            # ロングショート: 上位を買い、下位を売り（空売り制限を考慮）
+            from data_loader import build_no_short_tickers
+            try:
+                no_short = build_no_short_tickers()
+            except Exception:
+                no_short = frozenset()
+
+            top_long = loadings.nlargest(self.top_n // 2).index.tolist()
+
+            # 空売り不可銘柄（制度信用銘柄・非制度信用銘柄）を除外
+            shortable = loadings[~loadings.index.isin(no_short)]
+            top_short = shortable.nsmallest(self.top_n // 2).index.tolist()
+
             weights = {}
             for t in top_long:
                 weights[t] = 1.0 / len(top_long) * 0.5
-            for t in top_short:
-                weights[t] = -1.0 / len(top_short) * 0.5
+            if top_short:
+                for t in top_short:
+                    weights[t] = -1.0 / len(top_short) * 0.5
             return weights
 
 
