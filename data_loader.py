@@ -24,6 +24,72 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 # ─────────────────────────── JPX ユニバース ───────────────────────────────
 
+_NO_SHORT_CACHE: Optional[frozenset] = None
+
+JPX_MARGIN_URL = (
+    "https://www.jpx.co.jp/listing/others/margin/"
+    "tvdivq0000000od2-att/20260202_list.xlsx"
+)
+
+
+def build_no_short_tickers(
+    url: str = JPX_MARGIN_URL,
+    refresh: bool = False,
+) -> frozenset:
+    """
+    JPX貸借銘柄リストを取得し、空売り不可銘柄のtickerセットを返す。
+
+    日本市場では「制度信用銘柄」「非制度信用銘柄」は空売りできない。
+    空売り可能なのは「貸借銘柄」のみ。
+
+    Parameters
+    ----------
+    url     : JPX貸借銘柄リストExcelファイルのURL（定期的に更新要）
+    refresh : True の場合キャッシュを無視して再取得
+
+    Returns
+    -------
+    frozenset of str : 空売り不可ティッカー（4桁コード）の集合
+    """
+    global _NO_SHORT_CACHE
+    if _NO_SHORT_CACHE is not None and not refresh:
+        return _NO_SHORT_CACHE
+
+    try:
+        import openpyxl
+    except ImportError:
+        raise ImportError("openpyxl が必要です: pip install openpyxl")
+
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, timeout=30, headers=headers)
+    r.raise_for_status()
+
+    wb = openpyxl.load_workbook(io.BytesIO(r.content), read_only=True, data_only=True)
+    sheet_name = "一覧" if "一覧" in wb.sheetnames else wb.sheetnames[0]
+    ws = wb[sheet_name]
+
+    NO_SHORT_VALUES = {"制度信用銘柄", "非制度信用銘柄"}
+    no_short: set[str] = set()
+
+    # 行1: 空白ヘッダー, 行2: 実際のヘッダー, 行3以降: データ
+    for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        if row_idx <= 2:
+            continue
+        if not row or row[0] is None:
+            continue
+
+        code   = str(row[0]).strip()
+        shinyo = str(row[3]).strip() if len(row) > 3 and row[3] is not None else ""
+
+        if shinyo in NO_SHORT_VALUES:
+            if code.endswith(".0"):
+                code = code[:-2]
+            no_short.add(code)
+
+    _NO_SHORT_CACHE = frozenset(no_short)
+    return _NO_SHORT_CACHE
+
+
 def build_jpx_universe(exclude_types: frozenset = JPX_EXCLUDE_TYPES) -> pd.DataFrame:
     """
     JPXの data_j.xls を取得し、上場普通株式のDataFrameを返す。
