@@ -1,6 +1,9 @@
 """
 データローダー
 stooq / yfinance / JPX xls からデータを取得する共通ユーティリティ。
+
+OHLCV（始値・高値・安値・終値・出来高）データも取得できるよう拡張。
+JQuants-Forum の知見に基づきATR・HLバンド・出来高比率特徴量の計算も含む。
 """
 from __future__ import annotations
 import io
@@ -12,7 +15,7 @@ import pandas as pd
 import yfinance as yf
 import pandas_datareader.data as web
 from datetime import date, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 from config import JPX_DATA_URL, JPX_EXCLUDE_TYPES, PRICE_SUFFIX
 
@@ -45,7 +48,6 @@ def build_jpx_universe(exclude_types: frozenset = JPX_EXCLUDE_TYPES) -> pd.DataF
         if mtype in exclude_types:
             continue
 
-        # ticker 正規化: 数値→文字列, 末尾"0"除去（英字付き ticker 対応）
         raw_str = str(raw_code).strip()
         if raw_str.endswith(".0"):
             raw_str = raw_str[:-2]
@@ -56,7 +58,46 @@ def build_jpx_universe(exclude_types: frozenset = JPX_EXCLUDE_TYPES) -> pd.DataF
     return pd.DataFrame(rows)
 
 
-# ─────────────────────────── 株価データ取得 ──────────────────────────────
+# ─────────────────────────── OHLCV データ取得 ────────────────────────────
+
+def fetch_ohlcv_yfinance(
+    tickers: List[str],
+    start: str,
+    end: str,
+) -> Dict[str, pd.DataFrame]:
+    """
+    yfinance で複数銘柄のOHLCVデータを取得する。
+    Returns: {ticker: DataFrame(index=date, columns=[Open,High,Low,Close,Volume])}
+    """
+    yf_tickers = [f"{tk}{PRICE_SUFFIX}" for tk in tickers]
+    raw = yf.download(yf_tickers, start=start, end=end, auto_adjust=True, progress=False)
+    if raw.empty:
+        return {}
+
+    raw.index = pd.to_datetime(raw.index).tz_localize(None)
+    result = {}
+
+    if len(tickers) == 1:
+        df = raw[["Open", "High", "Low", "Close", "Volume"]].copy()
+        df.columns = ["Open", "High", "Low", "Close", "Volume"]
+        result[tickers[0]] = df
+    else:
+        for tk, yfk in zip(tickers, yf_tickers):
+            try:
+                df = pd.DataFrame({
+                    "Open":   raw["Open"][yfk],
+                    "High":   raw["High"][yfk],
+                    "Low":    raw["Low"][yfk],
+                    "Close":  raw["Close"][yfk],
+                    "Volume": raw["Volume"][yfk],
+                })
+                df.index = pd.to_datetime(df.index).tz_localize(None)
+                result[tk] = df.dropna(how="all")
+            except Exception:
+                pass
+
+    return result
+
 
 def fetch_prices_stooq(
     tickers: List[str],
@@ -64,10 +105,7 @@ def fetch_prices_stooq(
     end: str,
     field: str = "Close",
 ) -> pd.DataFrame:
-    """
-    pandas-datareader (stooq) で複数銘柄の終値を取得。
-    Returns: DataFrame(index=date, columns=ticker)
-    """
+    """pandas-datareader (stooq) で複数銘柄の終値を取得"""
     frames = {}
     for tk in tickers:
         symbol = f"{tk}.JP"
@@ -88,10 +126,7 @@ def fetch_prices_yfinance(
     end: str,
     field: str = "Close",
 ) -> pd.DataFrame:
-    """
-    yfinance で複数銘柄の終値を取得（stooq の代替）。
-    Returns: DataFrame(index=date, columns=ticker)
-    """
+    """yfinance で複数銘柄の終値を取得"""
     yf_tickers = [f"{tk}{PRICE_SUFFIX}" for tk in tickers]
     raw = yf.download(yf_tickers, start=start, end=end, auto_adjust=True, progress=False)
     if raw.empty:
@@ -111,13 +146,88 @@ def fetch_prices(
     end: Optional[str] = None,
     source: str = "yfinance",
 ) -> pd.DataFrame:
-    """
-    統一インターフェース: source="stooq" or "yfinance"
-    """
+    """統一インターフェース: source="stooq" or "yfinance" """
     end = end or date.today().isoformat()
     if source == "stooq":
         return fetch_prices_stooq(tickers, start, end)
     return fetch_prices_yfinance(tickers, start, end)
+
+
+# ─────────────────────────── JQuants系 特徴量計算 ──────────────────────────
+
+def compute_atr_features(
+    ohlcv: pd.DataFrame,
+    periods: List[int] = [5, 10, 20, 40, 60],
+) -> pd.DataFrame:
+    """
+    JQuants-Forum 由来のATR 4変種と HL Band を計算する。
+
+    特徴量:
+    - atr_{n}:      通常ATR（前日終値・高値・安値考慮）のN日移動平均
+    - g_atr_{n}:    ギャップATR（寄付vs前日終値）のN日移動平均
+    - d_atr_{n}:    日中ATR（高値-安値）のN日移動平均
+    - h_atr_{n}:    ヒゲATR（上下ヒゲ幅）のN日移動平均
+    - hl_{n}:       HL Band（N日高値 - N日安値）/ 終値
+    - vol_ratio_{n}: N日出来高比率（当日÷N日平均）
+    - mi_{n}:       マーケットインパクト（ATR / 出来高比率）
+    """
+    if ohlcv.empty or "Close" not in ohlcv.columns:
+        return pd.DataFrame()
+
+    close  = ohlcv["Close"]
+    prev_c = close.shift(1)
+
+    # ATR 4変種（正規化: 前日終値で除す）
+    atr_raw = pd.DataFrame({
+        "atr":   (ohlcv["High"].combine(prev_c, max) - ohlcv["Low"].combine(prev_c, min)) / prev_c,
+        "g_atr": (ohlcv["Open"] - prev_c).abs() / prev_c,
+        "d_atr": (ohlcv["High"] - ohlcv["Low"]) / prev_c,
+        "h_atr": ((ohlcv["High"] - ohlcv["Low"]) - (ohlcv["Open"] - close).abs()) / prev_c,
+    }).clip(lower=0)
+
+    result = {}
+    volume = ohlcv["Volume"].replace(0, np.nan)
+
+    for n in periods:
+        for col in ["atr", "g_atr", "d_atr", "h_atr"]:
+            result[f"{col}_{n}"] = atr_raw[col].rolling(n).mean()
+
+        # HL Band (期間高値-安値レンジ)
+        result[f"hl_{n}"] = (
+            ohlcv["High"].rolling(n).max() - ohlcv["Low"].rolling(n).min()
+        ) / close
+
+        # 出来高比率
+        vol_ma = volume.rolling(n).mean()
+        result[f"vol_ratio_{n}"] = volume / vol_ma
+
+        # マーケットインパクト
+        result[f"mi_{n}"] = atr_raw["atr"].rolling(n).mean() / (vol_ma * close / 1e6).replace(0, np.nan)
+
+    return pd.DataFrame(result, index=ohlcv.index)
+
+
+def period_wise_normalize(
+    df: pd.DataFrame,
+    period: str = "QE",
+) -> pd.DataFrame:
+    """
+    期間別正規化 (JQuants-Forum 知見):
+    各四半期（または指定期間）内で (x - mean) / std を計算。
+    ラベル分布の非定常性を緩和し、モデルの汎化性を向上させる。
+
+    Parameters
+    ----------
+    df : 正規化対象DataFrame
+    period : 集計期間（'QE'=四半期末, 'ME'=月末）
+    """
+    result = df.copy()
+    groups = df.groupby(df.index.to_period(period))
+    for _, grp in groups:
+        mu  = grp.mean()
+        std = grp.std().replace(0, np.nan)
+        result.loc[grp.index] = (grp - mu) / std
+    return result
 
 
 # ─────────────────────────── リターン計算 ─────────────────────────────────
@@ -155,12 +265,9 @@ def fetch_benchmark(
 def performance_stats(
     returns: pd.Series,
     benchmark: Optional[pd.Series] = None,
-    rf: float = 0.001,  # 無リスク金利 年率0.1%
+    rf: float = 0.001,
 ) -> dict:
-    """
-    共通パフォーマンス指標を計算する。
-    returns: 日次リターン系列
-    """
+    """共通パフォーマンス指標を計算する"""
     r = returns.dropna()
     ann_ret  = (1 + r).prod() ** (252 / len(r)) - 1
     ann_vol  = r.std() * np.sqrt(252)
@@ -171,20 +278,21 @@ def performance_stats(
     max_dd   = drawdown.min()
 
     stats = {
-        "ann_return":  round(ann_ret, 4),
-        "ann_vol":     round(ann_vol, 4),
-        "sharpe":      round(sharpe, 4),
+        "ann_return":   round(ann_ret, 4),
+        "ann_vol":      round(ann_vol, 4),
+        "sharpe":       round(sharpe, 4),
         "max_drawdown": round(max_dd, 4),
-        "calmar":      round(ann_ret / abs(max_dd), 4) if max_dd != 0 else np.nan,
+        "calmar":       round(ann_ret / abs(max_dd), 4) if max_dd != 0 else np.nan,
     }
 
     if benchmark is not None:
         b = benchmark.reindex(r.index).pct_change().dropna()
         r_aligned = r.reindex(b.index).dropna()
         b_aligned = b.reindex(r_aligned.index)
-        beta = np.cov(r_aligned, b_aligned)[0, 1] / np.var(b_aligned) if len(b_aligned) > 2 else np.nan
-        alpha = ann_ret - rf - beta * ((1 + b_aligned.mean()) ** 252 - 1 - rf)
-        stats["beta"]  = round(float(beta), 4)
-        stats["alpha"] = round(float(alpha), 4)
+        if len(b_aligned) > 2:
+            beta = np.cov(r_aligned, b_aligned)[0, 1] / np.var(b_aligned)
+            alpha = ann_ret - rf - beta * ((1 + b_aligned.mean()) ** 252 - 1 - rf)
+            stats["beta"]  = round(float(beta), 4)
+            stats["alpha"] = round(float(alpha), 4)
 
     return stats

@@ -5,9 +5,15 @@
 ML and RL in Finance Course 3-4 に基づく。
 "Inverse Optimization - A New Perspective on the Black-Litterman Model"
 
+【データリーク対策】
+- ML シグナル生成: 訓練データは予測月より過去のみ使用
+- 訓練ウィンドウ: monthly_ret.iloc[-(train_window+1):-1] で最終月を除外
+- ラベル: 各月内クロスセクション中央値（将来情報混入なし）
+- スケーラー: 訓練データのみでfit、予測時は同スケーラーで変換
+
 【Black-Litterman モデルの概要】
 標準B-Lモデル:
-1. 均衡リターン π = λ Σ w_mkt （逆最適化）
+1. 均衡リターン π = λ Σ w_mkt （逆最適化 = Inverse RL）
    λ: リスク回避係数
    Σ: 共分散行列
    w_mkt: 市場時価総額ウェイト
@@ -21,17 +27,6 @@ ML and RL in Finance Course 3-4 に基づく。
 
 4. 最適ウェイト:
    w* = (λΣ)^-1 μ_BL
-
-【逆最適化（Inverse RL的アプローチ）】
-観測されたポートフォリオウェイト（例: 市場時価総額比率）から、
-その背後にある目的関数（均衡リターン）を逆算する。
-これは逆強化学習（IRL）の金融応用。
-
-【ビューの生成】
-MLモデルのシグナルをB-Lビューとして組み込む:
-  - ML予測が強気 → 正のビュー (Q > 0)
-  - ML予測が弱気 → 負のビュー (Q < 0)
-  - ビューの確信度 → Ω の対角要素（小さい = 確信度高）
 """
 from __future__ import annotations
 import sys, os
@@ -42,122 +37,70 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from scipy.optimize import minimize
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 from backtest_engine import BaseStrategy
 
 
 class BlackLittermanOptimizer:
-    """
-    ブラック・リターマンポートフォリオ最適化器。
-
-    Parameters
-    ----------
-    risk_aversion : リスク回避係数 λ（デフォルト 2.5）
-    tau : 事前確率への信頼度（デフォルト 0.05）
-    """
+    """ブラック・リターマンポートフォリオ最適化器"""
 
     def __init__(self, risk_aversion: float = 2.5, tau: float = 0.05):
         self.lam = risk_aversion
         self.tau = tau
 
-    def equilibrium_returns(
-        self,
-        cov_matrix: np.ndarray,
-        market_weights: np.ndarray,
-    ) -> np.ndarray:
-        """
-        逆最適化による均衡リターン π = λ Σ w_mkt
-        """
+    def equilibrium_returns(self, cov_matrix, market_weights):
         return self.lam * cov_matrix @ market_weights
 
-    def posterior_returns(
-        self,
-        cov_matrix: np.ndarray,
-        market_weights: np.ndarray,
-        P: np.ndarray,
-        Q: np.ndarray,
-        omega: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """
-        B-L 事後リターンを計算する。
-
-        Parameters
-        ----------
-        cov_matrix : (N, N) 共分散行列
-        market_weights : (N,) 市場ウェイト
-        P : (K, N) ビュー行列（K=ビュー数）
-        Q : (K,) ビュー期待リターン
-        omega : (K, K) ビューの不確実性（None なら比例デフォルト）
-        """
+    def posterior_returns(self, cov_matrix, market_weights, P, Q, omega=None):
         pi = self.equilibrium_returns(cov_matrix, market_weights)
         tau_sigma = self.tau * cov_matrix
 
         if omega is None:
-            # Idzorek (2005) のデフォルト: Ω = τ * P Σ P'
             omega = self.tau * (P @ cov_matrix @ P.T)
 
-        # B-L 公式（Sherman-Morrison-Woodbury 形式）
-        ts_inv = np.linalg.inv(tau_sigma)
-        omega_inv = np.linalg.inv(omega)
+        ts_inv      = np.linalg.inv(tau_sigma)
+        omega_inv   = np.linalg.inv(omega)
+        post_cov_inv = ts_inv + P.T @ omega_inv @ P
+        post_cov     = np.linalg.inv(post_cov_inv)
+        return post_cov @ (ts_inv @ pi + P.T @ omega_inv @ Q)
 
-        posterior_cov_inv = ts_inv + P.T @ omega_inv @ P
-        posterior_cov = np.linalg.inv(posterior_cov_inv)
-
-        posterior_ret = posterior_cov @ (ts_inv @ pi + P.T @ omega_inv @ Q)
-        return posterior_ret
-
-    def optimal_weights(
-        self,
-        cov_matrix: np.ndarray,
-        expected_returns: np.ndarray,
-        constraints: list = None,
-    ) -> np.ndarray:
-        """
-        平均分散最適化: max(μ' w - λ/2 * w' Σ w)
-        制約: Σw = 1, w >= 0 (ロング専用)
-        """
+    def optimal_weights(self, cov_matrix, expected_returns, constraints=None):
         n = len(expected_returns)
         if constraints is None:
             constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1.0}]
-
-        bounds = [(0.0, 0.3)] * n  # 各銘柄最大30%
+        bounds = [(0.0, 0.3)] * n
         w0 = np.ones(n) / n
 
         def neg_utility(w):
-            ret  = expected_returns @ w
-            risk = 0.5 * self.lam * w @ cov_matrix @ w
-            return -(ret - risk)
+            return -(expected_returns @ w - 0.5 * self.lam * w @ cov_matrix @ w)
 
         result = minimize(
-            neg_utility, w0,
-            method="SLSQP",
-            bounds=bounds,
-            constraints=constraints,
+            neg_utility, w0, method="SLSQP",
+            bounds=bounds, constraints=constraints,
             options={"maxiter": 500, "ftol": 1e-9},
         )
-
         if result.success:
             weights = np.clip(result.x, 0, None)
-            return weights / weights.sum()
-        else:
-            return np.ones(n) / n
+            return weights / weights.sum() if weights.sum() > 0 else np.ones(n) / n
+        return np.ones(n) / n
 
 
 class BlackLittermanStrategy(BaseStrategy):
     """
-    ブラック・リターマン + ML ビュー戦略。
+    ブラック・リターマン + ML ビュー戦略（リーク修正版）。
 
-    1. 市場時価総額ウェイト → 逆最適化で均衡リターン取得
-    2. MLモデル（Random Forest）のシグナルをビューとして組み込む
-    3. B-L 事後リターンで最適ウェイトを計算
+    データリーク対策:
+    - 訓練ウィンドウは [-(train_window+1):-1] で最終月を除外
+    - ラベルは各月クロスセクション中央値以上=1（グローバル閾値なし）
+    - スケーラーは訓練データのみでfit
 
     Parameters
     ----------
-    n_stocks : ユニバースサイズ（最大銘柄数）
-    top_n : 実際に保有する銘柄数
-    tau : B-L のτパラメータ
-    risk_aversion : リスク回避係数
-    view_confidence : ビューへの確信度（0-1, 大きいほど ML を信頼）
+    top_n : 保有銘柄数
+    tau : B-L の τ パラメータ
+    risk_aversion : リスク回避係数 λ
+    view_confidence : ビューへの確信度（0-1）
+    train_window_months : ML 訓練ウィンドウ（月数）
     """
 
     name = "ブラック・リターマン + MLビュー"
@@ -177,28 +120,38 @@ class BlackLittermanStrategy(BaseStrategy):
         self.train_window = train_window_months
         self.optimizer = BlackLittermanOptimizer(risk_aversion, tau)
 
-    def _ml_signals(
-        self,
-        monthly_ret: pd.DataFrame,
-    ) -> pd.Series:
+    def _ml_signals(self, monthly_ret: pd.DataFrame) -> pd.Series:
         """
-        ランダムフォレストでモメンタムスコアを計算し、
-        B-L ビューの期待値として使用する。
-        Returns: pd.Series (index=ticker, values=expected_excess_return)
+        Random Forest で上昇確率を予測し、B-L ビューとして返す。
+
+        リーク対策:
+        - 訓練データ: monthly_ret.iloc[-(train_window+1):-1] （最終月を除外）
+        - ラベル: 各月クロスセクション中央値以上=1（グローバル閾値なし）
+        - スケーラー: 訓練データのみでfit
         """
-        if len(monthly_ret) < self.train_window + 2:
+        # 最終月を除いた訓練データ
+        # （最終月のリターンは予測対象月の翌月情報になりうるため除外）
+        train_data = monthly_ret.iloc[-(self.train_window + 1):-1]
+
+        if len(train_data) < 14:
             return pd.Series()
 
-        # 特徴量: 過去3/6/12ヶ月モメンタム
-        X_list, y_list, tickers_list = [], [], []
-        train_data = monthly_ret.iloc[-(self.train_window + 1):]
+        X_list, y_list = [], []
 
+        # 月次イテレーション（各月の特徴量で翌月を予測）
         for i in range(12, len(train_data) - 1):
-            next_ret = train_data.iloc[i + 1]
-            threshold = next_ret.median()
+            next_ret   = train_data.iloc[i + 1]
+            # ────────────────────────────────────────────────────────
+            # クロスセクション中央値でラベル付け
+            # 同月に同時確定する全銘柄の相対順位 → 将来情報でない
+            # ────────────────────────────────────────────────────────
+            cross_median = next_ret.median()
+
             for ticker in train_data.columns:
-                ts = train_data[ticker].iloc[:i+1]
-                if ts.isna().sum() > 3:
+                ts = train_data[ticker].iloc[:i+1].dropna()
+                if len(ts) < 12 or ticker not in next_ret.index:
+                    continue
+                if pd.isna(next_ret[ticker]):
                     continue
                 try:
                     f = [
@@ -206,11 +159,15 @@ class BlackLittermanStrategy(BaseStrategy):
                         float((1 + ts.iloc[-6:]).prod() - 1),
                         float((1 + ts.iloc[-12:]).prod() - 1),
                         float(ts.iloc[-12:].std()),
+                        # JQuants 由来: ボラティリティ多期間
+                        float(ts.iloc[-3:].std()),
+                        float(ts.iloc[-6:].std()),
+                        # 勝率
+                        float((ts.iloc[-12:] > 0).mean()),
                     ]
-                    if not any(np.isnan(v) for v in f):
+                    if all(np.isfinite(v) for v in f):
                         X_list.append(f)
-                        y_list.append(int(next_ret[ticker] >= threshold) if ticker in next_ret.index else 0)
-                        tickers_list.append(ticker)
+                        y_list.append(int(next_ret[ticker] >= cross_median))
                 except Exception:
                     pass
 
@@ -220,12 +177,17 @@ class BlackLittermanStrategy(BaseStrategy):
         X = np.array(X_list)
         y = np.array(y_list)
 
-        pipe = RandomForestClassifier(n_estimators=100, max_depth=4, random_state=42, n_jobs=-1)
+        # 訓練データのみでスケーラーをfit（リークなし）
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
-        pipe.fit(X_scaled, y)
 
-        # 現時点の予測
+        clf = RandomForestClassifier(
+            n_estimators=100, max_depth=4,
+            max_features=0.3, random_state=42, n_jobs=-1
+        )
+        clf.fit(X_scaled, y)
+
+        # 現時点の特徴量（最終月を含む全データから計算）
         current_scores = {}
         for ticker in monthly_ret.columns:
             ts = monthly_ret[ticker].dropna()
@@ -237,12 +199,16 @@ class BlackLittermanStrategy(BaseStrategy):
                     float((1 + ts.iloc[-6:]).prod() - 1),
                     float((1 + ts.iloc[-12:]).prod() - 1),
                     float(ts.iloc[-12:].std()),
+                    float(ts.iloc[-3:].std()),
+                    float(ts.iloc[-6:].std()),
+                    float((ts.iloc[-12:] > 0).mean()),
                 ]
-                if not any(np.isnan(v) for v in f):
+                if all(np.isfinite(v) for v in f):
+                    # 同じ scaler で変換（訓練データ統計を使用）
                     x = scaler.transform([f])
-                    prob = pipe.predict_proba(x)[0][1]
-                    # ビュー期待値: 確率を超過リターン期待値に変換
-                    current_scores[ticker] = (prob - 0.5) * 0.12  # ±6%レンジ
+                    prob = clf.predict_proba(x)[0][1]
+                    # ビュー期待値: (確率 - 0.5) × スケール → ±6%レンジ
+                    current_scores[ticker] = (prob - 0.5) * 0.12
             except Exception:
                 pass
 
@@ -255,47 +221,42 @@ class BlackLittermanStrategy(BaseStrategy):
         **kwargs,
     ) -> Dict[str, float]:
 
-        monthly = prices.resample("ME").last()
+        monthly    = prices.resample("ME").last()
         monthly_ret = monthly.pct_change()
 
         if len(monthly_ret) < 24:
             return {}
 
-        # 有効銘柄
-        valid = monthly_ret.dropna(thresh=int(len(monthly_ret) * 0.5), axis=1).columns
+        valid = monthly_ret.dropna(
+            thresh=int(len(monthly_ret) * 0.5), axis=1
+        ).columns
         if len(valid) < 10:
             return {}
 
-        monthly_ret = monthly_ret[valid]
+        monthly_ret  = monthly_ret[valid]
         prices_valid = prices[valid]
 
-        # 日次リターンから共分散行列を推定（252日）
+        # 共分散行列（直近252日の日次リターン）
         daily_ret = prices_valid.pct_change().dropna(how="all")
         if len(daily_ret) < 60:
             return {}
 
-        daily_window = daily_ret.iloc[-252:]
-        cov_matrix = daily_window.cov().values * 252  # 年率換算
-
-        # 市場ウェイト: 等ウェイト（時価総額データなし）
-        n = len(valid)
+        cov_matrix   = daily_ret.iloc[-252:].cov().values * 252
+        n            = len(valid)
         market_weights = np.ones(n) / n
 
-        # ML シグナルを B-L ビューとして使用
         ml_signals = self._ml_signals(monthly_ret)
 
         if ml_signals.empty:
-            # ビューなしの均衡ポートフォリオ
             pi = self.optimizer.equilibrium_returns(cov_matrix, market_weights)
             weights_raw = self.optimizer.optimal_weights(cov_matrix, pi)
         else:
-            # ビューを持つ銘柄のみ使用
             view_tickers = [t for t in ml_signals.index if t in valid]
             if not view_tickers:
                 weights_raw = market_weights
             else:
-                K = len(view_tickers)
                 ticker_list = list(valid)
+                K = len(view_tickers)
                 P = np.zeros((K, n))
                 Q = np.zeros(K)
                 Omega = np.zeros((K, K))
@@ -304,11 +265,12 @@ class BlackLittermanStrategy(BaseStrategy):
                     if vt in ticker_list:
                         P[k, ticker_list.index(vt)] = 1.0
                     Q[k] = float(ml_signals[vt])
-                    # ビューの不確実性: 確信度が高いほど小さい
-                    view_var = (1 - self.conf) * self.tau * float(cov_matrix[
-                        ticker_list.index(vt), ticker_list.index(vt)
-                    ]) if vt in ticker_list else 0.01
-                    Omega[k, k] = max(view_var, 1e-6)
+                    cov_idx = ticker_list.index(vt) if vt in ticker_list else 0
+                    view_var = max(
+                        (1 - self.conf) * self.tau * float(cov_matrix[cov_idx, cov_idx]),
+                        1e-6
+                    )
+                    Omega[k, k] = view_var
 
                 try:
                     post_ret = self.optimizer.posterior_returns(
@@ -318,8 +280,9 @@ class BlackLittermanStrategy(BaseStrategy):
                 except Exception:
                     weights_raw = market_weights
 
-        # ウェイトの小さい銘柄をカット、top_n に絞る
         weights_series = pd.Series(weights_raw, index=valid)
         top = weights_series.nlargest(self.top_n)
-        top = top / top.sum()
-        return dict(top)
+        total = top.sum()
+        if total <= 0:
+            return {}
+        return dict(top / total)

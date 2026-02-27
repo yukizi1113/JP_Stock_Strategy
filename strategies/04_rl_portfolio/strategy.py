@@ -131,11 +131,14 @@ class RLPortfolioStrategy(BaseStrategy):
         top_n: int = 10,
         train_episodes: int = 500,
         lookback: int = 60,
+        retrain_months: int = 12,
     ):
-        self.top_n   = top_n
-        self.episodes = train_episodes
-        self.lookback = lookback
-        self.agent   = QLearningAgent()
+        self.top_n         = top_n
+        self.episodes      = train_episodes
+        self.lookback      = lookback
+        self.retrain_months = retrain_months
+        self.agent         = QLearningAgent()
+        self._last_train_date: Optional[pd.Timestamp] = None
 
     def _compute_market_features(
         self,
@@ -205,11 +208,24 @@ class RLPortfolioStrategy(BaseStrategy):
         if len(prices) < self.lookback + 30:
             return {}
 
-        # 必要に応じてトレーニング（初回のみ）
-        if not self.agent.Q:
-            self._train(prices.iloc[:-1])
-            # ε を推論モードに固定
-            self.agent.epsilon = 0.0
+        # ─────────────────────────────────────────────────────────────
+        # ローリング再訓練（retrain_months ごとに Q テーブルをリセット）
+        # リーク防止: prices.iloc[:-1] で as_of 当日を除外して訓練
+        # 初回 or 前回訓練から retrain_months 経過時に再訓練
+        # ─────────────────────────────────────────────────────────────
+        needs_train = not self.agent.Q
+        if (
+            self._last_train_date is not None
+            and as_of is not None
+            and (as_of - self._last_train_date).days >= self.retrain_months * 30
+        ):
+            needs_train = True
+
+        if needs_train:
+            self.agent = QLearningAgent()   # Q テーブルをリセット
+            self._train(prices.iloc[:-1])   # as_of 当日を除外して訓練
+            self.agent.epsilon = 0.0        # 推論モードに固定
+            self._last_train_date = as_of
 
         # 現在の状態を評価
         i = len(prices) - 1
