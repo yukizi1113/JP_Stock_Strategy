@@ -60,6 +60,11 @@ STRATEGY_MAP = {
         "class":  "BlackLittermanStrategy",
         "kwargs": {"top_n": 20},
     },
+    "abcd_forecast": {
+        "module": "strategies.08_abcd_forecast.strategy",
+        "class":  "ABCDForecastStrategy",
+        "kwargs": {"n_matrices": 10, "top_n": 5, "long_only": False},
+    },
 }
 
 
