@@ -273,9 +273,6 @@ python backtest.py --model xgboost --top-n 20
 # 戦略7: ブラック・リターマン
 cd strategies/07_black_litterman
 python backtest.py --confidence 0.3
-# 戦略7: ブラック・リターマン08_abcd_forecast/  # ABCD-Forecast
-# 戦略7: ブラック・リターマンstrategy.py
-```
 
 ---
 
@@ -395,9 +392,11 @@ JP_Stock_Strategy/
 │   ├── 06_multi_factor_ml/ # マルチファクターML
 │   │   ├── strategy.py
 │   │   └── backtest.py
-│   └── 07_black_litterman/ # ブラック・リターマン + Inverse RL
+│   ├── 07_black_litterman/ # ブラック・リターマン + Inverse RL
 │       ├── strategy.py
-│       └── backtest.py
+│       ├── backtest.py
+│   ├── 08_abcd_forecast/  # ABCD-Forecast（マルチアセット）
+        └── strategy.py
 ├── execution/
 │   ├── kabu_api.py         # kabu STATION API ラッパー
 │   └── live_trader.py      # ライブ取引実行スクリプト
