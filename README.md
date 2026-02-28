@@ -273,6 +273,8 @@ python backtest.py --model xgboost --top-n 20
 # 戦略7: ブラック・リターマン
 cd strategies/07_black_litterman
 python backtest.py --confidence 0.3
+# 戦略7: ブラック・リターマン08_abcd_forecast/  # ABCD-Forecast
+# 戦略7: ブラック・リターマンstrategy.py
 ```
 
 ---
@@ -344,7 +346,7 @@ python execution/live_trader.py --strategy multi_factor --budget 5000000
 
 # 利用可能な戦略名
 # ml_momentum, eigen_portfolio, mean_reversion, rl_portfolio,
-# absorption_ratio, multi_factor, black_litterman
+# absorption_ratio, multi_factor, black_litterman, abcd_forecast
 ```
 
 ---
