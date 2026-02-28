@@ -125,7 +125,16 @@ def load_strategy(strategy_id: int, top_n: int = 20, **kwargs):
     mod = _loaded_modules[module_name]
 
     if strategy_id == 1:
-        return mod.MLMomentumStrategy(top_n=top_n)
+        # n_jobs=1: 並列ツリー学習を無効化してRAM使用量を大幅削減
+        # n_estimators=100, max_samples=0.6: さらにメモリ・速度を節約
+        return mod.MLMomentumStrategy(top_n=top_n, rf_params={
+            "n_estimators": 100,
+            "max_depth": 5,
+            "min_samples_leaf": 5,
+            "random_state": 42,
+            "n_jobs": 1,
+            "max_samples": 0.6,
+        })
     elif strategy_id == 2:
         return mod.EigenPortfolioStrategy(pc_index=1, top_n=top_n, window_months=36, long_only=True)
     elif strategy_id == 3:
@@ -135,7 +144,7 @@ def load_strategy(strategy_id: int, top_n: int = 20, **kwargs):
     elif strategy_id == 5:
         return mod.AbsorptionRatioStrategy(ar_window=252, ar_n_components=5, base_top_n=30)
     elif strategy_id == 6:
-        return mod.MultiFactorMLStrategy(top_n=top_n, model_type="xgboost")
+        return mod.MultiFactorMLStrategy(top_n=top_n, model_type="rf")
     elif strategy_id == 7:
         return mod.BlackLittermanStrategy(top_n=top_n, view_confidence=0.3)
     elif strategy_id == 8:
@@ -144,12 +153,12 @@ def load_strategy(strategy_id: int, top_n: int = 20, **kwargs):
 
 
 STRATEGY_INFO = {
-    1: {"name": "MLモメンタム",          "uses_jpx": True,  "max_stocks_override": None},
+    1: {"name": "MLモメンタム",          "uses_jpx": True,  "max_stocks_override": 1500},
     2: {"name": "PCA固有ポートフォリオ",  "uses_jpx": True,  "max_stocks_override": None},
     3: {"name": "OU平均回帰",            "uses_jpx": True,  "max_stocks_override": None},
     4: {"name": "RL（Q学習）",           "uses_jpx": True,  "max_stocks_override": 100},
     5: {"name": "吸収比率タイミング",     "uses_jpx": True,  "max_stocks_override": None},
-    6: {"name": "マルチファクターML",     "uses_jpx": True,  "max_stocks_override": None},
+    6: {"name": "マルチファクターML",     "uses_jpx": True,  "max_stocks_override": 1000},
     7: {"name": "ブラック・リターマン",   "uses_jpx": True,  "max_stocks_override": None},
     8: {"name": "ABCD-Forecast",         "uses_jpx": False, "max_stocks_override": None},
 }
