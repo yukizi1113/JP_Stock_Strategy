@@ -491,14 +491,15 @@ JP_Stock_Strategy/
 2. Kritzman et al. (2011) - Principal Components as a Measure of Systemic Risk
 3. Ornstein & Uhlenbeck (1930) - Mean-Reverting Stochastic Process
 4. Black & Litterman (1992) - Global Portfolio Optimization
-5. He & Litterman (1999) - Intuition Behind Black-Litterman
+5. He & Litterman (1999) - The Intuition Behind Black-Litterman Model Portfolios
 6. Kolm et al. (2021) - Inverse Optimization: B-L Perspective
-7. Halperin (2019) - QLBS: Q-Learner in the Black-Scholes World
-8. Halperin (2020) - The QLBS Q-Learner Goes NuQLear (Fitted Q-Iteration)
+7. Halperin (2019) - QLBS: Q-Learner in the Black-Scholes(-Merton) Worlds
+8. Halperin (2020) - The QLBS Q-Learner Goes NuQLear: Fitted Q Iteration, Inverse RL, and Option Portfolios
 9. Longstaff & Schwartz (2001) - Valuing American Options by Simulation (LSM)
 10. Almgren & Chriss (2001) - Optimal Execution of Portfolio Transactions
 11. 伊藤克哉ら (JSAI 2023) - ABCD-Forecast: 機密金融時系列予測のためのデータ拡張バギング手法
 12. UKI (JQuants-Forum) - Ternary Classification / Factor Neutralization
 13. Lopez de Prado (2018) - Advances in Financial Machine Learning (Rank-Gaussian)
+
 
 
