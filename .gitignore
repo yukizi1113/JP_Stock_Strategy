@@ -2,7 +2,7 @@
 *.env
 *.key
 data/*.csv
-data/*.pkl
+# data/*.pkl  # LFS管理に移行
 data/*.parquet
 __pycache__/
 *.pyc
