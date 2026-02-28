@@ -99,46 +99,64 @@ def get_company_name(ticker: str) -> str:
 # 戦略シグナル生成
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_strategy_instance(sid: int, top_n: int = 20):
-    """戦略インスタンスを生成（インポート失敗時はNone）"""
-    strat_dirs = {
-        1: "01_ml_momentum",
-        2: "02_eigen_portfolio",
-        3: "03_mean_reversion",
-        4: "04_rl_portfolio",
-        5: "05_absorption_ratio",
-        6: "06_multi_factor_ml",
-        7: "07_black_litterman",
-        8: "08_abcd_forecast",
-    }
-    strat_dir = os.path.join(ROOT, "strategies", strat_dirs[sid])
+import importlib.util as _importlib_util
+
+_STRAT_DIR_MAP_GO = {
+    1: "01_ml_momentum",
+    2: "02_eigen_portfolio",
+    3: "03_mean_reversion",
+    4: "04_rl_portfolio",
+    5: "05_absorption_ratio",
+    6: "06_multi_factor_ml",
+    7: "07_black_litterman",
+    8: "08_abcd_forecast",
+}
+_loaded_modules_go: dict = {}
+
+def _load_module_from_file_go(module_name: str, file_path: str):
+    spec = _importlib_util.spec_from_file_location(module_name, file_path)
+    if spec is None:
+        raise ImportError(f"ファイルが見つかりません: {file_path}")
+    mod = _importlib_util.module_from_spec(spec)
+    strat_dir = os.path.dirname(file_path)
+    added = False
     if strat_dir not in sys.path:
         sys.path.insert(0, strat_dir)
+        added = True
     try:
+        spec.loader.exec_module(mod)
+    finally:
+        if added and strat_dir in sys.path:
+            sys.path.remove(strat_dir)
+    return mod
+
+
+def get_strategy_instance(sid: int, top_n: int = 20):
+    """戦略インスタンスを生成（importlib使用、sys.path汚染なし）"""
+    if sid not in _STRAT_DIR_MAP_GO:
+        return None
+    strat_file = os.path.join(ROOT, "strategies", _STRAT_DIR_MAP_GO[sid], "strategy.py")
+    module_name = f"strategy_go_{sid:02d}"
+    try:
+        if module_name not in _loaded_modules_go:
+            _loaded_modules_go[module_name] = _load_module_from_file_go(module_name, strat_file)
+        mod = _loaded_modules_go[module_name]
         if sid == 1:
-            from strategy import MLMomentumStrategy
-            return MLMomentumStrategy(top_n=top_n)
+            return mod.MLMomentumStrategy(top_n=top_n)
         elif sid == 2:
-            from strategy import EigenPortfolioStrategy
-            return EigenPortfolioStrategy(pc_index=1, top_n=top_n, long_only=True)
+            return mod.EigenPortfolioStrategy(pc_index=1, top_n=top_n, long_only=True)
         elif sid == 3:
-            from strategy import MeanReversionStrategy
-            return MeanReversionStrategy(hurst_threshold=0.45, entry_z=1.5, exit_z=0.3)
+            return mod.MeanReversionStrategy(hurst_threshold=0.45, entry_z=1.5, exit_z=0.3)
         elif sid == 4:
-            from strategy import RLPortfolioStrategy
-            return RLPortfolioStrategy(top_n=min(top_n, 15), train_episodes=300)
+            return mod.RLPortfolioStrategy(top_n=min(top_n, 15), train_episodes=300)
         elif sid == 5:
-            from strategy import AbsorptionRatioStrategy
-            return AbsorptionRatioStrategy(ar_window=252, ar_n_components=5, base_top_n=30)
+            return mod.AbsorptionRatioStrategy(ar_window=252, ar_n_components=5, base_top_n=30)
         elif sid == 6:
-            from strategy import MultiFactorMLStrategy
-            return MultiFactorMLStrategy(top_n=top_n, model_type="xgboost")
+            return mod.MultiFactorMLStrategy(top_n=top_n, model_type="xgboost")
         elif sid == 7:
-            from strategy import BlackLittermanStrategy
-            return BlackLittermanStrategy(top_n=top_n, view_confidence=0.3)
+            return mod.BlackLittermanStrategy(top_n=top_n, view_confidence=0.3)
         elif sid == 8:
-            from strategy import ABCDForecastStrategy
-            return ABCDForecastStrategy(n_matrices=10, top_n=5, long_only=False)
+            return mod.ABCDForecastStrategy(n_matrices=10, top_n=5, long_only=False)
     except Exception as e:
         print(f"  戦略{sid}インスタンス生成失敗: {e}")
         return None

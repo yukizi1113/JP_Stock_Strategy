@@ -60,83 +60,82 @@ from backtest_engine import Backtester
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 戦略インポート（遅延インポートでエラーを戦略ごとに分離）
+# 戦略インポート（importlib で絶対パス指定・sys.path 汚染なし）
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_strategy(strategy_id: int, top_n: int = 20, **kwargs):
-    """戦略インスタンスを生成して返す（失敗してもNoneを返す）"""
-    try:
-        if strategy_id == 1:
-            sys.path.insert(0, os.path.join(ROOT, "strategies", "01_ml_momentum"))
-            from strategies.s01_ml_momentum.strategy import MLMomentumStrategy
-            return MLMomentumStrategy(top_n=top_n)
-        elif strategy_id == 2:
-            from strategies.s02_eigen_portfolio.strategy import EigenPortfolioStrategy
-            return EigenPortfolioStrategy(pc_index=1, top_n=top_n, window_months=36, long_only=True)
-        elif strategy_id == 3:
-            from strategies.s03_mean_reversion.strategy import MeanReversionStrategy
-            return MeanReversionStrategy(hurst_threshold=0.45, entry_z=1.5, exit_z=0.3)
-        elif strategy_id == 4:
-            from strategies.s04_rl_portfolio.strategy import RLPortfolioStrategy
-            return RLPortfolioStrategy(top_n=min(top_n, 15), train_episodes=300)
-        elif strategy_id == 5:
-            from strategies.s05_absorption_ratio.strategy import AbsorptionRatioStrategy
-            return AbsorptionRatioStrategy(ar_window=252, ar_n_components=5, base_top_n=30)
-        elif strategy_id == 6:
-            from strategies.s06_multi_factor_ml.strategy import MultiFactorMLStrategy
-            return MultiFactorMLStrategy(top_n=top_n, model_type="xgboost")
-        elif strategy_id == 7:
-            from strategies.s07_black_litterman.strategy import BlackLittermanStrategy
-            return BlackLittermanStrategy(top_n=top_n, view_confidence=0.3)
-        elif strategy_id == 8:
-            from strategies.s08_abcd_forecast.strategy import ABCDForecastStrategy
-            return ABCDForecastStrategy(n_matrices=10, top_n=5, long_only=False)
-    except ImportError:
-        # フォールバック: 直接インポート
-        pass
+import importlib.util as _importlib_util
 
-    # 直接インポート（sys.path を各戦略ディレクトリに設定）
-    strat_dirs = {
-        1: "01_ml_momentum",
-        2: "02_eigen_portfolio",
-        3: "03_mean_reversion",
-        4: "04_rl_portfolio",
-        5: "05_absorption_ratio",
-        6: "06_multi_factor_ml",
-        7: "07_black_litterman",
-        8: "08_abcd_forecast",
-    }
-    strat_dir = os.path.join(ROOT, "strategies", strat_dirs[strategy_id])
+def _load_module_from_file(module_name: str, file_path: str):
+    """importlib でファイルを直接インポートする（sys.path 非汚染）"""
+    spec = _importlib_util.spec_from_file_location(module_name, file_path)
+    if spec is None:
+        raise ImportError(f"ファイルが見つかりません: {file_path}")
+    mod = _importlib_util.module_from_spec(spec)
+    # 戦略ファイルが同一ディレクトリの他ファイル(backtest_engine等)を
+    # import できるよう、そのディレクトリをsys.pathに一時追加
+    strat_dir = os.path.dirname(file_path)
+    added = False
     if strat_dir not in sys.path:
         sys.path.insert(0, strat_dir)
+        added = True
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        # strat_dir を削除し sys.path を元に戻す
+        if added and strat_dir in sys.path:
+            sys.path.remove(strat_dir)
+    return mod
+
+_STRAT_DIR_MAP = {
+    1: "01_ml_momentum",
+    2: "02_eigen_portfolio",
+    3: "03_mean_reversion",
+    4: "04_rl_portfolio",
+    5: "05_absorption_ratio",
+    6: "06_multi_factor_ml",
+    7: "07_black_litterman",
+    8: "08_abcd_forecast",
+}
+
+# モジュールキャッシュ（同一戦略を複数回ロードしない）
+_loaded_modules: dict = {}
+
+def load_strategy(strategy_id: int, top_n: int = 20, **kwargs):
+    """
+    戦略インスタンスを生成して返す。
+
+    importlib.util.spec_from_file_location を使い、絶対パスで各戦略の
+    strategy.py を直接ロード。sys.path 汚染を避けることで
+    複数戦略のロード時に名前衝突が発生しない。
+    """
+    if strategy_id not in _STRAT_DIR_MAP:
+        return None
+
+    strat_subdir = _STRAT_DIR_MAP[strategy_id]
+    strat_file   = os.path.join(ROOT, "strategies", strat_subdir, "strategy.py")
+    module_name  = f"strategy_{strategy_id:02d}"
+
+    if module_name not in _loaded_modules:
+        _loaded_modules[module_name] = _load_module_from_file(module_name, strat_file)
+
+    mod = _loaded_modules[module_name]
 
     if strategy_id == 1:
-        from strategy import MLMomentumStrategy
-        return MLMomentumStrategy(top_n=top_n)
+        return mod.MLMomentumStrategy(top_n=top_n)
     elif strategy_id == 2:
-        from strategy import EigenPortfolioStrategy
-        return EigenPortfolioStrategy(pc_index=1, top_n=top_n, window_months=36, long_only=True)
+        return mod.EigenPortfolioStrategy(pc_index=1, top_n=top_n, window_months=36, long_only=True)
     elif strategy_id == 3:
-        from strategy import MeanReversionStrategy
-        return MeanReversionStrategy(hurst_threshold=0.45, entry_z=1.5, exit_z=0.3)
+        return mod.MeanReversionStrategy(hurst_threshold=0.45, entry_z=1.5, exit_z=0.3)
     elif strategy_id == 4:
-        from strategy import RLPortfolioStrategy
-        return RLPortfolioStrategy(top_n=min(top_n, 15), train_episodes=300)
+        return mod.RLPortfolioStrategy(top_n=min(top_n, 15), train_episodes=300)
     elif strategy_id == 5:
-        from strategy import AbsorptionRatioStrategy
-        return AbsorptionRatioStrategy(ar_window=252, ar_n_components=5, base_top_n=30)
+        return mod.AbsorptionRatioStrategy(ar_window=252, ar_n_components=5, base_top_n=30)
     elif strategy_id == 6:
-        from strategy import MultiFactorMLStrategy
-        return MultiFactorMLStrategy(top_n=top_n, model_type="xgboost")
+        return mod.MultiFactorMLStrategy(top_n=top_n, model_type="xgboost")
     elif strategy_id == 7:
-        from strategy import BlackLittermanStrategy
-        return BlackLittermanStrategy(top_n=top_n, view_confidence=0.3)
+        return mod.BlackLittermanStrategy(top_n=top_n, view_confidence=0.3)
     elif strategy_id == 8:
-        strat_dir8 = os.path.join(ROOT, "strategies", "08_abcd_forecast")
-        if strat_dir8 not in sys.path:
-            sys.path.insert(0, strat_dir8)
-        from strategy import ABCDForecastStrategy
-        return ABCDForecastStrategy(n_matrices=10, top_n=5, long_only=False)
+        return mod.ABCDForecastStrategy(n_matrices=10, top_n=5, long_only=False)
     return None
 
 
