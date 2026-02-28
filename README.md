@@ -25,8 +25,6 @@
 
 ### 1. MLファクターモメンタム（Cross-Sectional Momentum via Random Forest）
 
-**出典**: ML for Trading Module 2-4 / ML and RL in Finance Course 2-1
-
 モメンタム効果は最も堅牢なアノマリーの一つ。単純な過去リターンによるランキングではなく、
 Random Forest を用いて複数の特徴量（多期間モメンタム、ボラティリティ、勝率）を組み合わせた
 複合シグナルでランキングする。
@@ -42,8 +40,6 @@ Random Forest を用いて複数の特徴量（多期間モメンタム、ボラ
 ---
 
 ### 2. PCA固有ポートフォリオ（Eigen Portfolio via PCA）
-
-**出典**: ML and RL in Finance Course 2-2 (Eigen Portfolio Construction via PCA)
 
 リターン行列に主成分分析を適用し、固有ベクトルに対応するポートフォリオを構築する。
 
@@ -64,7 +60,7 @@ R = U Σ V^T  （SVD分解）
 
 ### 3. OU平均回帰 / ペア取引（Ornstein-Uhlenbeck Process）
 
-**出典**: ML and RL in Finance Course 3-4 + "Mean Reversion in Stock Prices" (論文)
+**出典**: "Mean Reversion in Stock Prices" (論文)
 
 **Ornstein-Uhlenbeck プロセス**:
 ```
@@ -92,8 +88,6 @@ H > 0.5: トレンド追随
 
 ### 4. Q学習ポートフォリオ最適化（Q-Learning Portfolio）
 
-**出典**: ML and RL in Finance Course 3 (MDP & Q-Learning)
-
 **QLBS (Q-Learner in Black-Scholes Worlds)** の考え方を株式ポートフォリオに応用。
 
 **MDP 定義**:
@@ -114,8 +108,6 @@ Q(s,a) ← Q(s,a) + α[R + γ max_a' Q(s',a') - Q(s,a)]
 
 ### 5. 吸収比率リスクタイミング（Absorption Ratio Risk Management）
 
-**出典**: ML and RL in Finance Course 2-4 (Absorption Ratio via PCA)
-
 **吸収比率 (AR)**:
 ```
 AR = Σ_{k=1}^{K} Var(PC_k) / Σ_{i=1}^{N} Var(r_i)
@@ -133,8 +125,6 @@ ARが低い健全な市場ではポジションを拡大する。
 ---
 
 ### 6. マルチファクターML（Multi-Factor Machine Learning）
-
-**出典**: ML and RL in Finance Course 2-1 (SVM, Random Forest) + ML for Trading Module 2
 
 テクニカル指標（RSI, MACD, ボリンジャーバンド、モメンタム）をXGBoost/Random Forestで
 組み合わせ、翌月リターンの上位/下位分類を行う。
@@ -165,8 +155,6 @@ ARが低い健全な市場ではポジションを拡大する。
 ---
 
 ### 7. ブラック・リターマン + MLビュー（Black-Litterman + Inverse RL）
-
-**出典**: ML and RL in Finance Course 3-4 + "Inverse Optimization: A New Perspective on the Black-Litterman Model"
 
 **標準B-Lモデル**:
 ```
@@ -389,7 +377,7 @@ python strategies/01_ml_momentum/backtest.py --prices-cache data/prices_cache.pk
 
 ---
 
-### JQuants-Forum 知見の統合（UKI000/JQuants-Forum）
+### JQuants-Forum 知見の統合
 
 決算発表後20日間の高値・安値予測コンペ（SIGNATE）の優秀コードより以下を採用:
 
@@ -497,7 +485,7 @@ JP_Stock_Strategy/
 
 ---
 
-## 学術的根拠（主要論文）
+## 根拠（主要論文）
 
 1. Jegadeesh & Titman (1993) - Momentum in Stock Returns
 2. Kritzman et al. (2011) - Principal Components as a Measure of Systemic Risk
@@ -512,3 +500,4 @@ JP_Stock_Strategy/
 11. 伊藤克哉ら (JSAI 2023) - ABCD-Forecast: データ拡張バギングによる時系列予測
 12. UKI (JQuants-Forum) - Ternary Classification / Factor Neutralization
 13. Lopez de Prado (2018) - Advances in Financial Machine Learning (Rank-Gaussian)
+
