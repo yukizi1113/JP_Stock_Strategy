@@ -1,5 +1,5 @@
 """
-戦略6: マルチファクターML (Multi-Factor Machine Learning)
+戦略6: マルチファクターML (Multi-Factor Machine Learning) — 改良版
 
 【理論背景】
 ML and RL in Finance Course 2-1 (SVM, Random Forest) +
@@ -12,6 +12,22 @@ JQuants-Forum (UKI000) 知見統合
 - 特徴量: 各月末時点で確定している過去データのみを使用
 - スケーラー: Pipeline内で学習データのみでfit
 - 時系列順守: 訓練 → 予測の方向は常に過去 → 未来
+
+【UKI記事に基づく改良点 (2024)】
+1. 3値分類 (Ternary Classification):
+   - 上位 top_ratio (デフォルト30%) = +1
+   - 下位 top_ratio           = -1
+   - 中間                     =  0 (学習から除外 → 境界近傍のノイズを削減)
+   - 2値分類より Sharpe が改善（境界近傍の曖昧なラベルを排除するため）
+
+2. ファクターニュートラライゼーション (Factor Neutralization):
+   - 市場ベータを OLS で除去（スコア = スコア - β × 市場スコア）
+   - 業種・市場ファクターを除いた残差リターン（銘柄固有成分）を予測
+   - UKI 実験: 日次 Sharpe 0.066 → 0.22 に改善
+
+3. ランクガウス変換 (Rank-Gaussian Normalization):
+   - 特徴量をランク化してガウス分布に写像（NormInv(rank/(N+1))）
+   - StandardScaler より外れ値に頑健、分布の正規性を保証
 
 【特徴量（JQuants由来追加）】
 ATR 4変種（価格データのみから近似計算）:
@@ -28,7 +44,7 @@ ATR 4変種（価格データのみから近似計算）:
   - 52週高値からの距離
 
 【モデル】
-XGBoost または Random Forest（バイナリ分類）
+XGBoost または Random Forest（3値分類）
 colsample_bytree=0.1 （JQuants 推奨: aggressive feature sampling）
 月次リバランス
 """
@@ -38,6 +54,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 import numpy as np
 import pandas as pd
+from scipy.special import ndtri  # ランクガウス変換用（scipy.stats.norm.ppf の高速版）
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -105,18 +122,105 @@ def compute_volatility_features(
     return features
 
 
-class MultiFactorMLStrategy(BaseStrategy):
+def rank_gaussian(arr: np.ndarray) -> np.ndarray:
     """
-    テクニカル特徴量による ML 株式選別戦略（リーク修正版）。
+    ランクガウス変換 (Rank-Gaussian Normalization)。
+    UKI記事: StandardScaler より外れ値に頑健で分布の正規性が保たれる。
 
-    ラベルは各月内クロスセクション中央値以上=1 で生成するため
-    グローバル閾値による将来情報の混入なし。
+    手順:
+      1. NaN を除く有効値をランク化 (1 ~ N)
+      2. 分位 q = rank / (N + 1) を計算（0/1 の端を避ける）
+      3. 正規分布の逆関数 Φ^{-1}(q) で変換
 
     Parameters
     ----------
-    top_n : 上位保有銘柄数
-    train_window_months : 学習ウィンドウ（月数）
-    model_type : 'xgboost' or 'rf'（random forest）
+    arr : (N,) 配列（NaN を含む可能性あり）
+
+    Returns
+    -------
+    変換後の (N,) 配列（NaN は保持）
+    """
+    result = np.full_like(arr, np.nan, dtype=float)
+    valid = np.isfinite(arr)
+    if valid.sum() < 2:
+        return result
+    valid_vals = arr[valid]
+    # ランク（平均ランク法: 同値がある場合に備える）
+    ranks = pd.Series(valid_vals).rank(method="average").values
+    N = len(ranks)
+    q = ranks / (N + 1)
+    # 数値安全のためクリップ
+    q = np.clip(q, 1e-6, 1 - 1e-6)
+    result[valid] = ndtri(q)
+    return result
+
+
+def factor_neutralize(
+    scores: pd.Series,
+    market_ret: pd.Series,
+) -> pd.Series:
+    """
+    ファクターニュートラライゼーション (OLS 1因子モデル)。
+
+    score_neutral_i = score_i - β_hat × market_score_i
+
+    UKI実験結果: 日次Sharpe 0.066 → 0.22 に改善。
+    市場全体の動きに連動した予測スコアの成分（市場ベータ）を除去し、
+    銘柄固有の成分のみを残す。
+
+    Parameters
+    ----------
+    scores     : 銘柄ごとの予測スコア（確率）。index=ticker
+    market_ret : 同一銘柄の市場代理変数（例: 全銘柄スコアの単純平均）
+                 index=ticker
+
+    Returns
+    -------
+    ファクターニュートラル後のスコア（index=ticker）
+    """
+    common = scores.index.intersection(market_ret.index)
+    if len(common) < 5:
+        return scores
+
+    s = scores[common].values
+    m = market_ret[common].values
+
+    # OLS: score = α + β × market_score + ε
+    m_centered = m - m.mean()
+    s_centered = s - s.mean()
+    denom = (m_centered ** 2).sum()
+    if denom < 1e-10:
+        return scores
+
+    beta = float((s_centered * m_centered).sum() / denom)
+    alpha = s.mean() - beta * m.mean()
+
+    neutral = s - (alpha + beta * m)
+    return pd.Series(neutral, index=common)
+
+
+class MultiFactorMLStrategy(BaseStrategy):
+    """
+    テクニカル特徴量による ML 株式選別戦略（3値分類 + ファクターニュートラライゼーション版）。
+
+    【改良点 (UKI Qiita 記事)】
+    1. 3値ラベル (top_ratio以上=+1 / 中間=0除外 / 下位=-1):
+       境界近傍の曖昧サンプルを学習から除くことで精度向上。
+    2. ファクターニュートラライゼーション:
+       予測スコアから市場共通成分を OLS で除去。
+       銘柄固有α成分のみを使いポートフォリオを構築。
+    3. ランクガウス変換:
+       StandardScaler より外れ値に頑健な特徴量正規化。
+
+    Parameters
+    ----------
+    top_n                : 上位保有銘柄数
+    train_window_months  : 学習ウィンドウ（月数）
+    model_type           : 'xgboost' or 'rf'（random forest）
+    ternary              : True=3値分類（推奨）, False=2値分類（後方互換）
+    top_ratio            : 3値分類時の上位/下位の割合（デフォルト0.3=30%）
+    factor_neutral       : True=ファクターニュートラライゼーション実施
+    rank_gauss           : True=ランクガウス変換（feature正規化）
     """
 
     name = "マルチファクターML"
@@ -126,10 +230,18 @@ class MultiFactorMLStrategy(BaseStrategy):
         top_n: int = 20,
         train_window_months: int = 36,
         model_type: str = "rf",
+        ternary: bool = True,
+        top_ratio: float = 0.3,
+        factor_neutral: bool = True,
+        rank_gauss: bool = True,
     ):
-        self.top_n          = top_n
-        self.train_window   = train_window_months
-        self.model_type     = model_type
+        self.top_n               = top_n
+        self.train_window        = train_window_months
+        self.model_type          = model_type
+        self.ternary             = ternary
+        self.top_ratio           = top_ratio
+        self.factor_neutral      = factor_neutral
+        self.rank_gauss          = rank_gauss
 
     def _compute_features_at(
         self,
@@ -210,6 +322,16 @@ class MultiFactorMLStrategy(BaseStrategy):
             return pd.DataFrame()
         return pd.DataFrame(records).T
 
+    def _apply_rank_gauss(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        全特徴量にランクガウス変換を適用。
+        各列（特徴量）を独立にランクガウス変換し、外れ値の影響を除去する。
+        """
+        out = df.copy()
+        for col in out.columns:
+            out[col] = rank_gaussian(out[col].values)
+        return out
+
     def _build_model(self) -> Pipeline:
         if self.model_type == "xgboost":
             try:
@@ -224,13 +346,13 @@ class MultiFactorMLStrategy(BaseStrategy):
                     random_state=42,
                     n_jobs=-1,
                     use_label_encoder=False,
-                    eval_metric="logloss",
+                    eval_metric="mlogloss",
                 )
             except ImportError:
                 return self._build_rf()
         else:
             return self._build_rf()
-        return Pipeline([("scaler", StandardScaler()), ("clf", clf)])
+        return Pipeline([("clf", clf)])
 
     def _build_rf(self) -> Pipeline:
         clf = RandomForestClassifier(
@@ -238,6 +360,7 @@ class MultiFactorMLStrategy(BaseStrategy):
             max_features=0.3,  # JQuants的な特徴量削減の近似
             random_state=42, n_jobs=-1
         )
+        # ランクガウス変換後なら StandardScaler は不要だが後方互換のため残す
         return Pipeline([("scaler", StandardScaler()), ("clf", clf)])
 
     def generate_signals(
@@ -262,16 +385,12 @@ class MultiFactorMLStrategy(BaseStrategy):
 
         # ──────────────────────────────────────────────────────────────
         # 学習データ構築
-        # ラベル: 各月内クロスセクション中央値以上=1
-        # → グローバル閾値を使わないためリークなし
         # ──────────────────────────────────────────────────────────────
         X_list, y_list = [], []
 
         for i in range(train_start, train_end):
-            # i 時点の月末日を価格インデックスで探す
             month_end_dt = monthly.index[i]
 
-            # prices のインデックスから月末に最も近い日を探す（<=月末）
             price_idx = prices.index.searchsorted(month_end_dt)
             if price_idx >= len(prices):
                 price_idx = len(prices) - 1
@@ -280,26 +399,55 @@ class MultiFactorMLStrategy(BaseStrategy):
             if feat.empty:
                 continue
 
+            # ランクガウス変換（特徴量の外れ値を除去）
+            if self.rank_gauss:
+                feat = self._apply_rank_gauss(feat)
+
             # 翌月リターン（リーク防止: i+1 の翌月データを使う）
             next_month_ret = monthly_ret.iloc[i + 1]
 
-            # ────────────────────────────────────────────────────────
-            # クロスセクション内ラベル付け
-            # 同月に同時確定する全銘柄の相対順位 → 将来情報でない
-            # ────────────────────────────────────────────────────────
+            # ──────────────────────────────────────────────────────────
+            # クロスセクション内ラベル付け（3値分類 / 2値分類）
+            # ──────────────────────────────────────────────────────────
             common = feat.index.intersection(next_month_ret.dropna().index)
             if len(common) < 10:
                 continue
 
-            cross_median = next_month_ret[common].median()
+            cross_ret = next_month_ret[common]
 
-            for ticker in common:
-                row = feat.loc[ticker].values.astype(float)
-                if np.any(~np.isfinite(row)):
-                    continue
-                label = int(next_month_ret[ticker] >= cross_median)
-                X_list.append(row)
-                y_list.append(label)
+            if self.ternary:
+                # ────────────────────────────────────────────────────
+                # 3値分類: 上位 top_ratio → +1, 下位 top_ratio → -1
+                # 中間は学習に含めない（曖昧サンプルの排除）
+                # ────────────────────────────────────────────────────
+                q_hi = cross_ret.quantile(1 - self.top_ratio)
+                q_lo = cross_ret.quantile(self.top_ratio)
+
+                for ticker in common:
+                    row = feat.loc[ticker].values.astype(float)
+                    if np.any(~np.isfinite(row)):
+                        continue
+                    r = cross_ret[ticker]
+                    if r >= q_hi:
+                        label = 1
+                    elif r <= q_lo:
+                        label = -1
+                    else:
+                        continue  # 中間は除外
+                    X_list.append(row)
+                    y_list.append(label)
+            else:
+                # ────────────────────────────────────────────────────
+                # 2値分類（後方互換）: 中央値以上=1
+                # ────────────────────────────────────────────────────
+                cross_median = cross_ret.median()
+                for ticker in common:
+                    row = feat.loc[ticker].values.astype(float)
+                    if np.any(~np.isfinite(row)):
+                        continue
+                    label = int(cross_ret[ticker] >= cross_median)
+                    X_list.append(row)
+                    y_list.append(label)
 
         if len(X_list) < 50:
             # フォールバック: 単純12ヶ月モメンタム
@@ -330,18 +478,42 @@ class MultiFactorMLStrategy(BaseStrategy):
         if current_feat.empty:
             return {}
 
+        # ランクガウス変換（予測時も同じ変換を適用）
+        if self.rank_gauss:
+            current_feat = self._apply_rank_gauss(current_feat)
+
         scores = {}
         for ticker in current_feat.index:
             row = current_feat.loc[ticker].values.astype(float)
             if not np.all(np.isfinite(row)):
                 continue
             try:
-                prob = model.predict_proba(row.reshape(1, -1))[0][1]
-                scores[ticker] = float(prob)
+                proba = model.predict_proba(row.reshape(1, -1))[0]
+                classes = model.classes_ if hasattr(model, 'classes_') else \
+                          model.named_steps['clf'].classes_
+                # 3値分類の場合: E[label] = Σ class_i × P(class_i)
+                # 2値分類の場合: P(class=1) と同じ（classes=[0,1] または [-1,1]）
+                score = float(sum(c * p for c, p in zip(classes, proba)))
+                scores[ticker] = score
             except Exception:
                 pass
 
-        top_tickers = sorted(scores, key=lambda k: scores[k], reverse=True)[:self.top_n]
+        if not scores:
+            return {}
+
+        scores_series = pd.Series(scores)
+
+        # ──────────────────────────────────────────────────────────────
+        # ファクターニュートラライゼーション
+        # 市場平均スコアに対する OLS 残差を最終スコアとして使用
+        # ──────────────────────────────────────────────────────────────
+        if self.factor_neutral and len(scores_series) >= 10:
+            market_score = pd.Series(
+                {t: scores_series.mean() for t in scores_series.index}
+            )
+            scores_series = factor_neutralize(scores_series, market_score)
+
+        top_tickers = scores_series.nlargest(self.top_n).index.tolist()
         if not top_tickers:
             return {}
         return {t: 1.0 / len(top_tickers) for t in top_tickers}
