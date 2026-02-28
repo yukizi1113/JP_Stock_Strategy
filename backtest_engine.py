@@ -22,6 +22,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from typing import Dict, Optional
+from scipy import stats as scipy_stats
 from data_loader import performance_stats, fetch_benchmark
 
 
@@ -165,7 +166,7 @@ class Backtester:
         return result
 
     def summary(self) -> Dict:
-        """パフォーマンスサマリーを返す"""
+        """パフォーマンスサマリーを返す（t検定・情報比率含む拡張版）"""
         if not hasattr(self, "_result"):
             self.run()
         stats = performance_stats(
@@ -173,6 +174,40 @@ class Backtester:
             benchmark=self._result["benchmark"]
         )
         stats["strategy"] = self.strategy.name
+
+        # ── 月次超過リターン vs ベンチマーク の t 検定 ──────────────────────
+        try:
+            port_monthly = (
+                (1 + self._port_ret.reindex(self._result.index))
+                .resample("ME").prod() - 1
+            )
+            bench_daily = self._result["benchmark"].pct_change()
+            bench_monthly = (
+                (1 + bench_daily)
+                .resample("ME").prod() - 1
+            )
+            excess = (port_monthly - bench_monthly.reindex(port_monthly.index)).dropna()
+            if len(excess) >= 6:
+                t_stat, p_val = scipy_stats.ttest_1samp(excess, 0.0)
+                stats["t_stat_vs_bench"]  = round(float(t_stat), 4)
+                stats["p_val_vs_bench"]   = round(float(p_val), 4)
+                stats["n_months"]         = len(excess)
+                stats["mean_excess_monthly"] = round(float(excess.mean()), 6)
+                # Information Ratio
+                tracking_err = float(excess.std()) * np.sqrt(12)
+                ann_excess   = float(excess.mean()) * 12
+                ir = ann_excess / tracking_err if tracking_err > 0 else np.nan
+                stats["information_ratio"] = round(ir, 4)
+                stats["ann_excess_return"] = round(ann_excess, 4)
+                # Bootstrap 95% CI for mean excess return (1000 draws)
+                rng = np.random.default_rng(42)
+                boot = [rng.choice(excess, size=len(excess), replace=True).mean()
+                        for _ in range(1000)]
+                stats["boot_ci_lo"] = round(float(np.percentile(boot, 2.5)) * 12, 4)
+                stats["boot_ci_hi"] = round(float(np.percentile(boot, 97.5)) * 12, 4)
+        except Exception:
+            pass
+
         return stats
 
     def plot(self, save_path: Optional[str] = None) -> None:

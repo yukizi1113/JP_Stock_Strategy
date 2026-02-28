@@ -219,6 +219,152 @@ def fetch_prices(
     return fetch_prices_yfinance(tickers, start, end)
 
 
+# ─────────────────────────── EDINETデータベース連携 ───────────────────────────
+
+EDINET_DB_PATH = r"C:\Users\hp\Documents\JP_Valuation_EDINET\data\valuation.db"
+
+
+def build_universe_from_edinet(
+    db_path: str = EDINET_DB_PATH,
+    active_only: bool = True,
+    exclude_markets: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """
+    EDINET/JPXデータベースから上場銘柄ユニバースを構築する。
+
+    本番データベース（4429社、うちactive 3765社）を使用。
+    yfinanceより確実な銘柄リストが得られる。
+
+    Parameters
+    ----------
+    db_path      : SQLiteデータベースパス
+    active_only  : True の場合アクティブ銘柄のみ
+    exclude_markets : 除外する市場区分リスト
+
+    Returns
+    -------
+    DataFrame with columns: ticker, company_name, market, industry_name
+    """
+    import sqlite3
+    try:
+        con = sqlite3.connect(db_path)
+        query = "SELECT ticker, company_name, market, industry_name FROM company_master"
+        if active_only:
+            query += " WHERE is_active = 1"
+        df = pd.read_sql_query(query, con)
+        con.close()
+    except Exception as e:
+        warnings.warn(f"EDINETデータベース読み込み失敗: {e}。JPXウェブから取得します。")
+        return build_jpx_universe()
+
+    if exclude_markets:
+        df = df[~df["market"].isin(exclude_markets)]
+
+    # 4桁ティッカーのみ抽出（ETF等を除外）
+    df = df[df["ticker"].str.match(r"^\d{4}$")].copy()
+    df = df.rename(columns={"company_name": "company", "market": "market_type"})
+    return df.reset_index(drop=True)
+
+
+# ─────────────────────────── 価格キャッシュ（pickle）──────────────────────────
+
+def fetch_prices_cached(
+    tickers: List[str],
+    start: str,
+    end: Optional[str] = None,
+    source: str = "yfinance",
+    cache_path: Optional[str] = None,
+    force_refresh: bool = False,
+    batch_size: int = 200,
+    min_coverage: float = 0.3,
+) -> pd.DataFrame:
+    """
+    価格データをキャッシュから読み込み、または新規取得してキャッシュ保存する。
+
+    大量銘柄（3800銘柄）を効率的に取得するためのバッチ処理と
+    キャッシュ機能を提供する。
+
+    Parameters
+    ----------
+    tickers      : 銘柄コードリスト（4桁）
+    start        : 開始日 'YYYY-MM-DD'
+    end          : 終了日
+    source       : "yfinance" or "stooq"
+    cache_path   : キャッシュファイルパス (.pkl)
+    force_refresh: True の場合キャッシュを無視して再取得
+    batch_size   : yfinanceバッチサイズ（大きすぎるとエラー）
+    min_coverage : 有効銘柄の最低データカバレッジ率
+
+    Returns
+    -------
+    DataFrame (index=date, columns=ticker) 終値
+    """
+    import pickle, os
+
+    end = end or date.today().isoformat()
+
+    if cache_path and os.path.exists(cache_path) and not force_refresh:
+        try:
+            with open(cache_path, "rb") as f:
+                cached = pickle.load(f)
+            # キャッシュの期間チェック
+            cached_start = cached.index[0].strftime("%Y-%m-%d")
+            cached_end   = cached.index[-1].strftime("%Y-%m-%d")
+            if cached_start <= start and cached_end >= end:
+                # ティッカーフィルタ
+                available = [t for t in tickers if t in cached.columns]
+                print(f"キャッシュ使用: {len(available)}/{len(tickers)}銘柄 "
+                      f"({cached_start}〜{cached_end})")
+                return cached[available].loc[start:end]
+            else:
+                print(f"キャッシュ期間外 ({cached_start}〜{cached_end})。再取得します。")
+        except Exception as e:
+            print(f"キャッシュ読み込み失敗: {e}。再取得します。")
+
+    # バッチ取得
+    print(f"価格データ取得開始: {len(tickers)}銘柄, {start}〜{end} ({source})")
+    all_frames: List[pd.DataFrame] = []
+
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i: i + batch_size]
+        pct_done = (i + len(batch)) / len(tickers) * 100
+        print(f"  バッチ {i//batch_size + 1}: {len(batch)}銘柄 [{pct_done:.0f}%完了]")
+        try:
+            frame = fetch_prices(batch, start, end, source=source)
+            if not frame.empty:
+                all_frames.append(frame)
+        except Exception as e:
+            print(f"  バッチエラー (ticker {batch[0]}〜): {e}")
+        # yfinanceへの過負荷を避けるためのミニ待機
+        import time
+        time.sleep(0.5)
+
+    if not all_frames:
+        return pd.DataFrame()
+
+    prices = pd.concat(all_frames, axis=1)
+    # 重複カラム除去
+    prices = prices.loc[:, ~prices.columns.duplicated()]
+
+    # 最低カバレッジフィルタ
+    min_rows = int(len(prices) * min_coverage)
+    prices = prices.dropna(axis=1, thresh=min_rows)
+
+    print(f"取得完了: {prices.shape[1]}銘柄 / {len(prices)}日")
+
+    # キャッシュ保存
+    if cache_path:
+        os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
+        try:
+            with open(cache_path, "wb") as f:
+                pickle.dump(prices, f, protocol=4)
+            print(f"キャッシュ保存: {cache_path}")
+        except Exception as e:
+            print(f"キャッシュ保存失敗: {e}")
+
+    return prices
+
+
 # ─────────────────────────── JQuants系 特徴量計算 ──────────────────────────
 
 def compute_atr_features(

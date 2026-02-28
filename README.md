@@ -239,28 +239,54 @@ pip install -r requirements.txt
 
 ---
 
-## バックテスト実行
+## クイックスタート（一括実行）
+
+### 全8戦略 一括バックテスト（推奨）
 
 ```bash
-# 戦略1: MLモメンタム
+# 全8戦略を一括実行（2018-2024、全銘柄ユニバース）
+# 所要時間: 価格取得30-60分 + 各戦略 合計5-10時間（夜間実行推奨）
+python master_backtest.py
+
+# 期間を指定して実行
+python master_backtest.py --start 2018-01-01 --end 2024-12-31
+
+# 特定の戦略のみ実行
+python master_backtest.py --strategies 1,2,8
+
+# テスト実行（500銘柄に制限して高速確認）
+python master_backtest.py --max-stocks 500
+
+# 結果の統計的分析（t検定・情報比率・ブートストラップCI）
+python statistical_comparison.py
+
+# 本日の発注指示生成（予算500万円）
+python generate_orders.py --budget 5000000
+```
+
+### 個別バックテスト実行
+
+```bash
+# 戦略1: MLモメンタム（全銘柄、2018-2024）
 cd strategies/01_ml_momentum
-python backtest.py --start 2015-01-01 --end 2024-12-31 --top-n 20
+python backtest.py --start 2018-01-01 --end 2024-12-31 --top-n 20
+
+# 価格キャッシュを使い回す場合（2回目以降は高速）
+python backtest.py --prices-cache ../../data/prices_cache.pkl
 
 # 戦略2: 固有ポートフォリオ（PC2を使用）
 cd strategies/02_eigen_portfolio
 python backtest.py --pc 1 --top-n 20
-
-# 戦略2: 吸収比率の可視化
-python backtest.py --absorption-only
+python backtest.py --absorption-only  # 吸収比率の可視化のみ
 
 # 戦略3: OU平均回帰
 cd strategies/03_mean_reversion
-python backtest.py --start 2015-01-01 --end 2024-12-31
+python backtest.py --start 2018-01-01 --end 2024-12-31
 python backtest.py --hurst-only   # Hurst指数分布確認
 
-# 戦略4: Q学習ポートフォリオ
+# 戦略4: Q学習ポートフォリオ（最大100銘柄）
 cd strategies/04_rl_portfolio
-python backtest.py --episodes 300
+python backtest.py --episodes 300 --max-stocks 100
 
 # 戦略5: 吸収比率リスクタイミング
 cd strategies/05_absorption_ratio
@@ -273,6 +299,50 @@ python backtest.py --model xgboost --top-n 20
 # 戦略7: ブラック・リターマン
 cd strategies/07_black_litterman
 python backtest.py --confidence 0.3
+
+# 戦略8: ABCD-Forecast（マルチアセット）
+cd strategies/08_abcd_forecast
+python backtest.py --n-matrices 10 --top-n 5
+```
+
+### 発注指示の生成
+
+```bash
+# 全戦略の本日発注指示を生成（予算500万円）
+python generate_orders.py --budget 5000000
+
+# 特定戦略のみ・予算1000万円
+python generate_orders.py --strategies 1,6,8 --budget 10000000
+
+# 出力ファイル:
+#   orders/YYYY-MM-DD_orders.md   マークダウン形式（読みやすい）
+#   orders/YYYY-MM-DD_orders.csv  CSV形式（発注システム向け）
+#   orders/YYYY-MM-DD_signals.json シグナルJSON（プログラム連携用）
+```
+
+---
+
+## データソース
+
+| ソース | 用途 | 備考 |
+|--------|------|------|
+| **yfinance** | 日本株終値・マルチアセット価格 | デフォルト。3800銘柄対応 |
+| **stooq** | 日本株終値（バックアップ） | `--source stooq` オプション |
+| **EDINET/JPX SQLite** | 銘柄ユニバース（3765社） | `data_loader.build_universe_from_edinet()` |
+| **JPX data_j.xls** | フォールバックユニバース | EDINETデータベース不在時に使用 |
+
+### 価格キャッシュ機能
+
+`data/prices_cache.pkl` に全銘柄の価格データをキャッシュ。
+2回目以降は数分で読み込める（初回は30〜60分かかる）。
+
+```bash
+# キャッシュを強制更新
+python master_backtest.py --force-refresh
+
+# キャッシュを指定して個別戦略を実行
+python strategies/01_ml_momentum/backtest.py --prices-cache data/prices_cache.pkl
+```
 
 ---
 
