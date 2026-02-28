@@ -497,7 +497,8 @@ JP_Stock_Strategy/
 8. Halperin (2020) - The QLBS Q-Learner Goes NuQLear (Fitted Q-Iteration)
 9. Longstaff & Schwartz (2001) - Valuing American Options by Simulation (LSM)
 10. Almgren & Chriss (2001) - Optimal Execution of Portfolio Transactions
-11. 伊藤克哉ら (JSAI 2023) - ABCD-Forecast: データ拡張バギングによる時系列予測
+11. 伊藤克哉ら (JSAI 2023) - ABCD-Forecast: 機密金融時系列予測のためのデータ拡張バギング手法
 12. UKI (JQuants-Forum) - Ternary Classification / Factor Neutralization
 13. Lopez de Prado (2018) - Advances in Financial Machine Learning (Rank-Gaussian)
+
 
