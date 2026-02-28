@@ -25,8 +25,12 @@ master_backtest.py ― 全8戦略 一括バックテスト実行スクリプト
   戦略7 (Black-Litterman): 30〜60分
   戦略8 (ABCD Forecast):   15〜30分 ※別途マルチアセット取得
 """
-import os, sys, time, json, traceback, argparse
+import os, sys, time, json, traceback, argparse, warnings
 from datetime import datetime
+
+# sklearn/yfinance の大量警告を抑制（ログ肥大化を防ぐ）
+warnings.filterwarnings("ignore")
+os.environ["PYTHONWARNINGS"] = "ignore"
 
 import numpy as np
 import pandas as pd
