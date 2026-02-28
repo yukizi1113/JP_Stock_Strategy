@@ -17,6 +17,7 @@
 | 5 | 吸収比率リスクタイミング | PCA Absorption Ratio | ★★★★ | `strategies/05_absorption_ratio/` |
 | 6 | マルチファクターML | XGBoost/RF × テクニカル+ファンダメンタル | ★★★★★ | `strategies/06_multi_factor_ml/` |
 | 7 | ブラック・リターマン+MLビュー | B-L × 逆最適化 × Inverse RL | ★★★★ | `strategies/07_black_litterman/` |
+| 8 | ABCD-Forecast（マルチアセット） | データ拡張バギング × スパース逆行列アンサンブル | ★★★★★ | `strategies/08_abcd_forecast/` |
 
 ---
 
