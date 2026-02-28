@@ -151,7 +151,16 @@ ARが低い健全な市場ではポジションを拡大する。
   - 勝率 (過去252日の上昇日割合)
 ```
 
-**モデル**: XGBoost または Random Forest（バイナリ分類）
+**改良点 (UKI Qiita記事 2024)**:
+
+1. **3値分類 (Ternary)**: 上位30%=+1 / 下位30%=-1 / 中間を学習から除外
+   → 境界近傍の曖昧サンプルを削除し分類精度を向上
+2. **ファクターニュートラライゼーション**: OLS で市場共通成分を除去
+   → 日次Sharpe 0.066 → 0.22 に改善（UKI実験）
+3. **ランクガウス変換**: StandardScaler の代わりに NormInv(rank/(N+1)) を適用
+   → 外れ値に頑健、分布の正規性を保証
+
+**モデル**: XGBoost または Random Forest（3値分類）
 
 ---
 
@@ -172,6 +181,46 @@ ARが低い健全な市場ではポジションを拡大する。
 - Random Forest で翌月上昇確率を予測
 - 確率 → 超過リターン期待値に変換（例: prob=0.8 → view=+3.6%）
 - Ω（ビュー不確実性）を確信度で調整
+
+---
+
+### 8. ABCD-Forecast（マルチアセット）
+
+**出典**: 伊藤克哉ら「ABCD-Forecast: 機密金融時系列予測のためのデータ拡張バギング手法」 JSAI 2023
+
+クラウドソーシング型コンペを模倣した新しいアンサンブル学習枠組み。
+N 種類のスパース正則行列でデータを変換し、各問題に独立なモデルを当て、
+逆変換後のアンサンブルで最終シグナルを得る。
+
+```
+アルゴリズム:
+  For n = 1..N:
+    1. A_n: スパース可逆行列（対角=1, 下対角=-1, 行/列ランダム置換）
+       → det(A_n) = ±1 → 常に正則
+    2. Y^n = A_n @ Y（ボラティリティ正規化後リターン）
+       → スプレッド問題 n を生成
+    3. 弱学習器 p_n: Random Forest で翌日スプレッド方向を予測
+    4. 逆変換: pred_n = A_n^{-1} @ p_n(X^n) → 元資産の予測スコア
+  アンサンブル: ŷ = (1/N) Σ pred_n
+```
+
+**IMOS定理**: n シグナル + n² ノイズでも、平均化によりシグナルが浮き出る
+（論文実験: ASR=1.516 vs Random Forest単体 0.473）
+
+**対象アセット**:
+
+| 資産クラス | ティッカー例 | スプレッドコスト |
+|-----------|------------|---------------|
+| 日本ETF | 1321.T, 1306.T, 1343.T, 1570.T | 0.05% |
+| 株価指数 | ^N225, ^GSPC, ^HSI, ^FTSE | 0.03% |
+| コモディティ先物 | GC=F, CL=F, SI=F, HG=F, ZW=F | 0.10% |
+| 為替 | USDJPY=X, EURJPY=X, GBPJPY=X | 0.02% |
+| 仮想通貨 | BTC-USD, ETH-USD | 0.30% |
+
+> 日本以外の市場に上場する個別株は対象外（指数・ETF・FX・先物・仮想通貨は対象）
+
+**スプレッド対応**: `1/(1 + 50 × spread_cost)` のペナルティで高スプレッド資産のウェイトを割引。
+月次リバランスで回転率を抑制。
 
 ---
 
@@ -389,3 +438,6 @@ JP_Stock_Strategy/
 8. Halperin (2020) - The QLBS Q-Learner Goes NuQLear (Fitted Q-Iteration)
 9. Longstaff & Schwartz (2001) - Valuing American Options by Simulation (LSM)
 10. Almgren & Chriss (2001) - Optimal Execution of Portfolio Transactions
+11. 伊藤克哉ら (JSAI 2023) - ABCD-Forecast: データ拡張バギングによる時系列予測
+12. UKI (JQuants-Forum) - Ternary Classification / Factor Neutralization
+13. Lopez de Prado (2018) - Advances in Financial Machine Learning (Rank-Gaussian)
