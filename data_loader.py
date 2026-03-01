@@ -481,6 +481,9 @@ def performance_stats(
 ) -> dict:
     """共通パフォーマンス指標を計算する"""
     r = returns.dropna()
+    if len(r) == 0:
+        return {"ann_return": np.nan, "ann_vol": np.nan, "sharpe": np.nan,
+                "max_drawdown": np.nan, "calmar": np.nan}
     ann_ret  = (1 + r).prod() ** (252 / len(r)) - 1
     ann_vol  = r.std() * np.sqrt(252)
     sharpe   = (ann_ret - rf) / ann_vol if ann_vol > 0 else np.nan

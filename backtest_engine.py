@@ -159,7 +159,9 @@ class Backtester:
             bench_val = pd.Series(np.nan, index=dates)
         bench_val.name = "benchmark"
 
-        result = pd.concat([portfolio, bench_val], axis=1).dropna()
+        # ベンチマークが全NaNでもポートフォリオ行を残す（benchmark列のNaNは許容）
+        result = pd.concat([portfolio, bench_val], axis=1)
+        result = result.dropna(subset=[portfolio.name])  # ポートフォリオ列のみ必須
         self._result   = result
         self._port_ret = port_ret.reindex(result.index)
         self._weights  = weights
