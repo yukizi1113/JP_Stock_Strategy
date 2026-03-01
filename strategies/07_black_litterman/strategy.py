@@ -223,6 +223,8 @@ class BlackLittermanStrategy(BaseStrategy):
 
         monthly    = prices.resample("ME").last()
         monthly_ret = monthly.pct_change()
+        # 月次リターンのクリッピング: ±80%超は外れ値として処理
+        monthly_ret = monthly_ret.clip(lower=-0.80, upper=0.80)
 
         if len(monthly_ret) < 24:
             return {}
@@ -237,7 +239,7 @@ class BlackLittermanStrategy(BaseStrategy):
         prices_valid = prices[valid]
 
         # 共分散行列（直近252日の日次リターン）
-        daily_ret = prices_valid.pct_change().dropna(how="all")
+        daily_ret = prices_valid.pct_change().clip(lower=-0.50, upper=0.50).dropna(how="all")
         if len(daily_ret) < 60:
             return {}
 

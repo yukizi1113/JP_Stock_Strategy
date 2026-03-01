@@ -62,6 +62,7 @@ from data_loader import (
     fetch_benchmark,
 )
 from backtest_engine import Backtester
+from data_cleaner import clean_price_data, save_quality_report
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -245,6 +246,17 @@ def run_all_backtests(
         jpx_prices = jpx_prices.dropna(axis=1, thresh=int(len(jpx_prices) * 0.5))
         print(f"価格取得完了: {jpx_prices.shape[1]}銘柄 / {len(jpx_prices)}日 "
               f"({time.time()-t0:.0f}秒)")
+
+        # ── データ品質チェック (3ラウンド) ──────────────────────────────────
+        print("\n" + "="*60)
+        print(" データ品質チェック (3ラウンド)")
+        print("="*60)
+        jpx_prices, quality_report = clean_price_data(jpx_prices, verbose=True)
+        print(f"\n品質チェック完了: {quality_report['summary']}")
+
+        # 品質レポートをCSVで保存
+        os.makedirs(results_dir, exist_ok=True)
+        save_quality_report(quality_report, os.path.join(results_dir, "data_quality_report.csv"))
 
     # ── Step 2: マルチアセット価格取得（戦略8用）───────────────────────────────
     multi_prices = None

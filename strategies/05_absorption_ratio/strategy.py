@@ -131,8 +131,8 @@ class AbsorptionRatioStrategy(BaseStrategy):
         **kwargs,
     ) -> Dict[str, float]:
 
-        # 日次リターン計算
-        daily_ret = prices.pct_change().dropna(how="all")
+        # 日次リターン計算（外れ値クリッピング後に共分散計算）
+        daily_ret = prices.pct_change().clip(lower=-0.50, upper=0.50).dropna(how="all")
         daily_ret = daily_ret.dropna(axis=1, thresh=int(len(daily_ret) * 0.5))
 
         if len(daily_ret) < self.ar_window + 10:

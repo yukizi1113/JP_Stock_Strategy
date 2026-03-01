@@ -375,6 +375,8 @@ class MultiFactorMLStrategy(BaseStrategy):
 
         monthly    = prices.resample("ME").last()
         monthly_ret = monthly.pct_change()
+        # 月次リターンのクリッピング: ±80%超は外れ値として処理
+        monthly_ret = monthly_ret.clip(lower=-0.80, upper=0.80)
         n_months   = len(monthly)
 
         if n_months < self.train_window + 2:

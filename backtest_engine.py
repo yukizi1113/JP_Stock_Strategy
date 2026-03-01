@@ -72,7 +72,10 @@ class Backtester:
         benchmark_ticker: str = "^N225",
         execution_lag: int = 1,
     ):
-        self.prices      = prices.dropna(how="all").ffill().bfill()
+        # bfill は上場前期間に IPO価格を埋めてしまうため使用しない。
+        # ffill(limit=10) のみ: 祝日・短期取引停止（最大10営業日）の補完に限定。
+        # 上場前の NaN は保持し、各戦略の generate_signals() が自然に除外する。
+        self.prices      = prices.dropna(how="all").ffill(limit=10)
         self.strategy    = strategy
         self.rebal_freq  = rebal_freq
         self.initial_cash = initial_cash
@@ -137,7 +140,16 @@ class Backtester:
         # shift(1) により前日ウェイト × 当日リターン → 翌日適用
         # ─────────────────────────────────────────────────────────────
         daily_ret = prices.pct_change()
-        port_ret  = (weights.shift(1) * daily_ret).sum(axis=1)
+
+        # 安全網: clean_price_data()でほぼ除去済みだが万が一残った
+        # 極端リターン(±50%超)を最終クリッピング
+        from data_cleaner import clip_returns_for_backtest
+        daily_ret = clip_returns_for_backtest(daily_ret, hard_cap=0.50)
+
+        # 保有銘柄が取引停止・上場前でリターンNaNの場合は0リターンとして扱う
+        # (NaNのままsumするとweight合計が1未満になり過小評価になるため)
+        daily_ret_filled = daily_ret.fillna(0.0)
+        port_ret = (weights.shift(1) * daily_ret_filled).sum(axis=1)
 
         # 取引コスト（ウェイト変化量の片道コスト）
         turnover  = weights.diff().abs().sum(axis=1)

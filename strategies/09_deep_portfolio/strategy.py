@@ -532,8 +532,14 @@ class DeepPortfolioStrategy(BaseStrategy):
         if len(valid_cols) < 10:
             return {}
 
-        prices_clean = prices_win[valid_cols].ffill().bfill()
-        returns = prices_clean.pct_change().dropna().values.astype(np.float32)
+        prices_clean = prices_win[valid_cols].ffill(limit=10)
+        # 日次リターンをクリッピング（±50%超は外れ値）してからSVDへ
+        returns = (
+            prices_clean.pct_change()
+            .clip(lower=-0.50, upper=0.50)
+            .dropna(how="all")
+            .values.astype(np.float32)
+        )
         tickers = list(valid_cols)
 
         if returns.shape[0] < self.H + 30:

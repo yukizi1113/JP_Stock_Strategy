@@ -185,7 +185,7 @@ class RLPortfolioStrategy(BaseStrategy):
 
                 # 翌期リターン（全銘柄等ウェイト × スケール因子）
                 if i + 1 < n:
-                    next_ret = prices.iloc[i+1] / prices.iloc[i] - 1
+                    next_ret = (prices.iloc[i+1] / prices.iloc[i] - 1).clip(-0.50, 0.50)
                     avg_ret = next_ret.dropna().mean()
                     portfolio_ret = avg_ret * w
 

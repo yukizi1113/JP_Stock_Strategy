@@ -131,6 +131,14 @@ class MLMomentumStrategy(BaseStrategy):
         monthly = prices.resample("ME").last()
         monthly_ret = monthly.pct_change()
 
+        # ── 学習前データ品質チェック ──────────────────────────────────────
+        # 月次リターンも±80%でクリッピング（日次±50%でも月複利で大きくなりうる）
+        # これにより外れ値が特徴量・ラベルに混入しないことを保証する
+        monthly_ret = monthly_ret.clip(lower=-0.80, upper=0.80)
+
+        # 上場前（NaN）の月はそのまま保持し、特徴量計算時に dropna() で除外
+        # 各銘柄の有効月数を確認（12ヶ月未満は後段で自動除外）
+
         n_months = len(monthly_ret)
         if n_months < 14:
             return {}
