@@ -220,10 +220,9 @@ def clean_price_data(
     report["round3_recent_ipo"] = n_recent
 
     # ─────────────────────────────────────────────────────────────────────
-    # 品質サマリー
+    # 品質スコア計算（ボルフィルタ前）→ ボルフィルタ → サマリー の順序
     # ─────────────────────────────────────────────────────────────────────
-    n_stocks_final  = df.shape[1]
-    n_removed_total = n_stocks_orig - n_stocks_final
+    n_after_cov = df.shape[1]
 
     # 銘柄ごとの品質スコア計算
     final_ret = df.pct_change()
@@ -236,17 +235,44 @@ def clean_price_data(
         "min_daily_ret":  final_ret.min().round(4),
         "ret_std_ann":    (final_ret.std() * np.sqrt(252)).round(4),
     })
+
+    # 年率ボラ分布の確認
+    vol_arr = stock_quality["ret_std_ann"].dropna()
+    _log(f"  年率ボラ分布: 中央値={vol_arr.median():.1%}, "
+         f"95%ile={vol_arr.quantile(0.95):.1%}, "
+         f"最大値={vol_arr.max():.1%}")
+
+    # (3d) 年率ボラ200%超の銘柄を除去
+    # 東証の値幅制限（~30%/日）を考慮すると、年率200%超（日次~12.6%/日）は
+    # データエラーの可能性が高い。Round 2で取り除けなかった長期エラー銘柄の最終除去。
+    MAX_ANN_VOL = 2.00  # 200%
+    high_vol_mask = vol_arr > MAX_ANN_VOL
+    n_high_vol = int(high_vol_mask.sum())
+    if n_high_vol > 0:
+        high_vol_tickers = high_vol_mask[high_vol_mask].index.tolist()
+        df = df.drop(columns=high_vol_tickers, errors="ignore")
+        stock_quality = stock_quality[~stock_quality.index.isin(high_vol_tickers)]
+        _log(f"  年率ボラ{MAX_ANN_VOL*100:.0f}%超の銘柄: {n_high_vol}銘柄 -> 除去")
+    report["round3_high_vol_removed"] = n_high_vol
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 最終サマリー
+    # ─────────────────────────────────────────────────────────────────────
+    n_stocks_final = df.shape[1]
+    n_removed_total = n_stocks_orig - n_stocks_final
     report["stock_quality"] = stock_quality
 
     report["summary"] = {
-        "n_orig":           n_stocks_orig,
-        "n_final":          n_stocks_final,
-        "n_removed":        n_removed_total,
-        "removed_pct":      round(n_removed_total / n_stocks_orig * 100, 1),
-        "total_days":       n_days,
-        "round1_removed":   report["round1_removed"],
-        "round2_removed":   report["round2_removed"],
-        "round3_removed":   n_removed_coverage,
+        "n_orig":              n_stocks_orig,
+        "n_after_cov_filter":  n_after_cov,
+        "n_after_vol_filter":  n_stocks_final,
+        "n_removed_total":     n_removed_total,
+        "removed_pct":         round(n_removed_total / n_stocks_orig * 100, 1),
+        "total_days":          n_days,
+        "round1_removed_pts":  report["round1_removed"],
+        "round2_removed_pts":  report["round2_removed"],
+        "round3_cov_removed":  n_removed_coverage,
+        "round3_vol_removed":  n_high_vol,
         "remaining_extreme_returns": int(remaining_extreme),
     }
 
@@ -255,15 +281,9 @@ def clean_price_data(
          f"({n_removed_total}銘柄除去, {n_removed_total/n_stocks_orig*100:.1f}%)")
     _log(f"  残存異常リターン: {remaining_extreme}件")
 
-    # 年率ボラティリティの分布を確認（正常なら15%〜50%に集中するはず）
-    vol_arr = stock_quality["ret_std_ann"].dropna()
-    _log(f"  年率ボラ分布: 中央値={vol_arr.median():.1%}, "
-         f"95%ile={vol_arr.quantile(0.95):.1%}, "
-         f"最大値={vol_arr.max():.1%}")
-
-    if vol_arr.max() > 3.0:
-        n_high_vol = int((vol_arr > 3.0).sum())
-        _log(f"  ⚠ 年率ボラ300%超の銘柄: {n_high_vol}銘柄 → 要確認")
+    # 最終ボラ確認
+    vol_final = stock_quality["ret_std_ann"].dropna()
+    _log(f"  最終年率ボラ: 中央値={vol_final.median():.1%}, 最大={vol_final.max():.1%}")
 
     return df, report
 
