@@ -310,7 +310,12 @@ def fetch_prices_cached(
             # キャッシュの期間チェック
             cached_start = cached.index[0].strftime("%Y-%m-%d")
             cached_end   = cached.index[-1].strftime("%Y-%m-%d")
-            if cached_start <= start and cached_end >= end:
+            # 末尾5営業日の差異は許容（年末最終取引日 vs 12/31 等のずれ対策）
+            import pandas as _pd
+            _cache_end_dt = _pd.Timestamp(cached_end)
+            _req_end_dt   = _pd.Timestamp(end)
+            end_ok = _cache_end_dt >= (_req_end_dt - _pd.Timedelta(days=5))
+            if cached_start <= start and end_ok:
                 # ティッカーフィルタ
                 available = [t for t in tickers if t in cached.columns]
                 print(f"キャッシュ使用: {len(available)}/{len(tickers)}銘柄 "
