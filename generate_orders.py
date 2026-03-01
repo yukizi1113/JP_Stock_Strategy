@@ -1,11 +1,11 @@
 """
-generate_orders.py ― 全8戦略の本日発注指示を自動生成
+generate_orders.py ― 全9戦略の本日発注指示を自動生成
 
 機能:
   1. 当日の価格データを取得（yfinance）
-  2. 全8戦略の generate_signals() を実行
+  2. 全9戦略の generate_signals() を実行
   3. 各戦略の具体的発注指示を生成:
-     - 日本株戦略（1-7）: ticker, 会社名, BUY/SELL, 推奨ウェイト%,
+     - 日本株戦略（1-7,9）: ticker, 会社名, BUY/SELL, 推奨ウェイト%,
        予算換算の株数・金額, 参考株価（yfinance終値）
      - マルチアセット（8）: ticker, 資産名, BUY/SELL, ウェイト%,
        円換算金額, スプレッドコスト, 取引所/取引方法
@@ -70,6 +70,7 @@ STRATEGY_NAMES = {
     6: "マルチファクターML",
     7: "ブラック・リターマン",
     8: "ABCD-Forecast (マルチアセット)",
+    9: "Deep Portfolio Optimization (DPO)",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -110,6 +111,7 @@ _STRAT_DIR_MAP_GO = {
     6: "06_multi_factor_ml",
     7: "07_black_litterman",
     8: "08_abcd_forecast",
+    9: "09_deep_portfolio",
 }
 _loaded_modules_go: dict = {}
 
@@ -157,6 +159,9 @@ def get_strategy_instance(sid: int, top_n: int = 20):
             return mod.BlackLittermanStrategy(top_n=top_n, view_confidence=0.3)
         elif sid == 8:
             return mod.ABCDForecastStrategy(n_matrices=10, top_n=5, long_only=False)
+        elif sid == 9:
+            return mod.DeepPortfolioStrategy(top_n=top_n, H=128, C=20, L=4, Q=16, K=64,
+                                             retrain_interval=6, max_train_stocks=500, n_epochs=8)
     except Exception as e:
         print(f"  戦略{sid}インスタンス生成失敗: {e}")
         return None
@@ -549,7 +554,7 @@ def main():
     parser.add_argument("--out-dir", default=os.path.join(ROOT, "orders"))
     args = parser.parse_args()
 
-    strategy_ids = list(range(1, 9))
+    strategy_ids = list(range(1, 10))
     if args.strategies:
         strategy_ids = [int(x.strip()) for x in args.strategies.split(",")]
 
@@ -570,7 +575,7 @@ def main():
     print("=" * 60)
 
     # ── ユニバース取得 ────────────────────────────────────────────────────────
-    jpx_strategies = [sid for sid in strategy_ids if sid != 8]
+    jpx_strategies = [sid for sid in strategy_ids if sid != 8]  # 8のみマルチアセット
     jpx_prices = None
     if jpx_strategies:
         print("\nユニバース取得中...")
@@ -665,7 +670,7 @@ def main():
     for sid in sorted(all_orders.keys()):
         strat_name = STRATEGY_NAMES.get(sid, f"戦略{sid}")
         print(f"\n【戦略{sid}: {strat_name}】")
-        if sid in (1, 2, 3, 5, 6, 7):
+        if sid in (1, 2, 3, 5, 6, 7, 9):
             print("  発注方式: 月末翌営業日 成行（寄付き）/ ロング専用")
         elif sid == 4:
             print("  発注方式: 月末翌営業日 成行（寄付き）/ RL制御 100銘柄以内")
@@ -711,7 +716,7 @@ def main():
 【発注手順】
   1. 月末リバランス日（各月最終営業日）の翌営業日に発注
   2. 発注方式: 成行（寄付き）または指値（前日終値±1%）
-  3. 戦略1-7 (日本株): SBI証券、楽天証券などで通常株式発注
+  3. 戦略1-7, 9 (日本株): SBI証券、楽天証券などで通常株式発注
   4. 戦略8 (マルチアセット): 各アセットクラスの取引所・口座で別途執行
   5. 仮想通貨・FXは証拠金リスクに注意（ポジションサイズを適切に調整）
 """)

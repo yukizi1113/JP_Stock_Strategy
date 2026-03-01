@@ -1,9 +1,9 @@
 """
-master_backtest.py ― 全8戦略 一括バックテスト実行スクリプト
+master_backtest.py ― 全9戦略 一括バックテスト実行スクリプト
 
 機能:
   1. 全3800銘柄の価格データを一括取得・キャッシュ
-  2. 全8戦略を順番に実行
+  2. 全9戦略を順番に実行
   3. 結果を results/ フォルダに保存
   4. TOPIX比較チャートと統計サマリーを出力
 
@@ -16,14 +16,15 @@ master_backtest.py ― 全8戦略 一括バックテスト実行スクリプト
 
 所要時間の目安:
   価格取得（3800銘柄）: 30〜60分
-  戦略1 (ML Momentum):     1〜3時間
-  戦略2 (PCA Eigen):       15〜30分
-  戦略3 (Mean Reversion):  30〜60分
-  戦略4 (RL Portfolio):    30〜60分
-  戦略5 (Absorption Ratio): 15〜30分
-  戦略6 (Multi Factor ML): 2〜5時間
-  戦略7 (Black-Litterman): 30〜60分
-  戦略8 (ABCD Forecast):   15〜30分 ※別途マルチアセット取得
+  戦略1 (ML Momentum):         1〜3時間
+  戦略2 (PCA Eigen):           15〜30分
+  戦略3 (Mean Reversion):      30〜60分
+  戦略4 (RL Portfolio):        30〜60分
+  戦略5 (Absorption Ratio):    15〜30分
+  戦略6 (Multi Factor ML):     2〜5時間
+  戦略7 (Black-Litterman):     30〜60分
+  戦略8 (ABCD Forecast):       15〜30分 ※別途マルチアセット取得
+  戦略9 (Deep Portfolio DPO):  2〜4時間 ※PyTorch必要
 """
 import os, sys, time, json, traceback, argparse, warnings
 from datetime import datetime
@@ -99,6 +100,7 @@ _STRAT_DIR_MAP = {
     6: "06_multi_factor_ml",
     7: "07_black_litterman",
     8: "08_abcd_forecast",
+    9: "09_deep_portfolio",
 }
 
 # モジュールキャッシュ（同一戦略を複数回ロードしない）
@@ -149,6 +151,18 @@ def load_strategy(strategy_id: int, top_n: int = 20, **kwargs):
         return mod.BlackLittermanStrategy(top_n=top_n, view_confidence=0.3)
     elif strategy_id == 8:
         return mod.ABCDForecastStrategy(n_matrices=10, top_n=5, long_only=False)
+    elif strategy_id == 9:
+        return mod.DeepPortfolioStrategy(
+            top_n=top_n,
+            H=128,
+            C=20,
+            L=4,
+            Q=16,
+            K=64,
+            retrain_interval=6,
+            max_train_stocks=500,
+            n_epochs=8,
+        )
     return None
 
 
@@ -161,6 +175,7 @@ STRATEGY_INFO = {
     6: {"name": "マルチファクターML",     "uses_jpx": True,  "max_stocks_override": 1000},
     7: {"name": "ブラック・リターマン",   "uses_jpx": True,  "max_stocks_override": None},
     8: {"name": "ABCD-Forecast",         "uses_jpx": False, "max_stocks_override": None},
+    9: {"name": "Deep Portfolio (DPO)",   "uses_jpx": True,  "max_stocks_override": 800},
 }
 
 
@@ -190,7 +205,7 @@ def run_all_backtests(
     {strategy_id: {"stats": dict, "result": DataFrame, "error": str}}
     """
     if strategy_ids is None:
-        strategy_ids = [1, 2, 3, 4, 5, 6, 7, 8]
+        strategy_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     results_dir = results_dir or os.path.join(ROOT, "results")
     os.makedirs(results_dir, exist_ok=True)
@@ -258,7 +273,7 @@ def run_all_backtests(
         t_start = time.time()
         try:
             # 価格データ選択
-            if sid == 8:
+            if not STRATEGY_INFO[sid]["uses_jpx"]:
                 if multi_prices is None or multi_prices.empty:
                     raise ValueError("マルチアセット価格データが利用不可")
                 prices_for_bt = multi_prices
@@ -437,7 +452,7 @@ def plot_comparison_chart(all_results: dict, benchmark_data: pd.Series,
 
 
 def main():
-    parser = argparse.ArgumentParser(description="全8戦略 一括バックテスト")
+    parser = argparse.ArgumentParser(description="全9戦略 一括バックテスト")
     parser.add_argument("--start",    default="2018-01-01")
     parser.add_argument("--end",      default="2024-12-31")
     parser.add_argument("--strategies", default=None,
@@ -456,7 +471,7 @@ def main():
 
     print(f"【全戦略バックテスト開始】")
     print(f"  期間: {args.start} 〜 {args.end}")
-    print(f"  戦略: {strategy_ids or '全8戦略'}")
+    print(f"  戦略: {strategy_ids or '全9戦略'}")
     print(f"  最大銘柄数: {args.max_stocks or '全銘柄'}")
     print(f"  開始時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
