@@ -109,6 +109,7 @@ class Backtester:
 
         weights = pd.DataFrame(0.0, index=dates, columns=prices.columns)
         current_w: Dict[str, float] = {}
+        prev_valid_tickers: set = set()  # 前期のポートフォリオに含まれていた銘柄
 
         for rd in rebal_dates:
             # ─────────────────────────────────────────────────────────
@@ -131,9 +132,22 @@ class Backtester:
 
             current_w = new_w
 
-            valid_tickers = [t for t in current_w if t in prices.columns]
+            valid_tickers = set(t for t in current_w if t in prices.columns)
+
+            # ─────────────────────────────────────────────────────────
+            # 【バグ修正】ポートフォリオを離れた銘柄のウェイトを0にリセット。
+            # これを行わないと古いウェイトが蓄積し、実効レバレッジが月数倍に
+            # 膨れ上がり、-100%超のドローダウンや負のポートフォリオ価値が発生する。
+            # ─────────────────────────────────────────────────────────
+            removed_tickers = prev_valid_tickers - valid_tickers
+            for t in removed_tickers:
+                weights.loc[rd:, t] = 0.0
+
+            # 新しいウェイトを設定（rd 以降に適用、次回リバランスで上書き）
             for t in valid_tickers:
                 weights.loc[rd:, t] = current_w[t]
+
+            prev_valid_tickers = valid_tickers
 
         # ─────────────────────────────────────────────────────────────
         # 日次リターン計算

@@ -167,7 +167,10 @@ class MeanReversionStrategy(BaseStrategy):
             log_p = np.log(ts.values)
 
             # Hurst指数で平均回帰性を確認
-            H = hurst_exponent(log_p, max_lag=50)
+            # 【修正】log価格（非定常）ではなく対数リターン（定常）で計算する。
+            # log価格に適用すると小標本バイアスにより H≈1.0 となり全銘柄を排除してしまう。
+            log_ret = np.diff(log_p)
+            H = hurst_exponent(log_ret, max_lag=50)
             if H >= self.hurst_threshold:
                 continue
 

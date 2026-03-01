@@ -141,7 +141,9 @@ def load_strategy(strategy_id: int, top_n: int = 20, **kwargs):
     elif strategy_id == 2:
         return mod.EigenPortfolioStrategy(pc_index=1, top_n=top_n, window_months=36, long_only=True)
     elif strategy_id == 3:
-        return mod.MeanReversionStrategy(hurst_threshold=0.45, entry_z=1.5, exit_z=0.3)
+        # hurst_threshold=0.63: R/S小標本バイアス(+0.17@n=252)を補正したしきい値。
+        # 純粋ランダムウォークのH_observed≈0.67 なので 0.63 は「それより平均回帰的」を意味する。
+        return mod.MeanReversionStrategy(hurst_threshold=0.63, entry_z=1.5, exit_z=0.3)
     elif strategy_id == 4:
         return mod.RLPortfolioStrategy(top_n=min(top_n, 15), train_episodes=300)
     elif strategy_id == 5:
